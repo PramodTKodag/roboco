@@ -12,7 +12,6 @@ import httpx
 
 from roboco.config import settings
 from roboco.runtime.orchestrator import (
-    _ANTHROPIC_PROBE_BASE,
     _CEO_NOTIFY_THRESHOLD,
     _HTTP_MULTIPLE_CHOICES,
     _HTTP_OK,
@@ -400,18 +399,11 @@ Start by:
         """Resolve the (url, headers) for a free liveness probe of ``provider``.
 
         Returns ``(None, {})`` when the provider can't be probed — an unknown
-        provider, or Anthropic with no API key configured. The caller then
-        falls back to time-expiry optimism rather than parking forever.
+        provider, or Anthropic, whose subscription login is never used for a
+        side-channel probe. The caller then falls back to time-expiry optimism
+        rather than parking forever.
         """
         p = provider.lower()
-        if p == "anthropic":
-            key = settings.anthropic_api_key
-            if not key:
-                return None, {}
-            return (
-                f"{_ANTHROPIC_PROBE_BASE}/v1/models",
-                {"x-api-key": key, "anthropic-version": "2023-06-01"},
-            )
         if p.startswith("ollama"):
             return f"{settings.ollama_base_url.rstrip('/')}/api/tags", {}
         return None, {}
@@ -419,13 +411,13 @@ Start by:
     async def _do_probe(self, provider: str) -> bool:
         """Return True if ``provider`` is accepting requests again.
 
-        Makes a free, unmetered liveness call — Anthropic ``GET /v1/models``
-        or Ollama ``GET /api/tags`` — and treats only a 2xx response as
+        Makes a free, unmetered liveness call — Ollama ``GET /api/tags`` — and
+        treats only a 2xx response as
         recovered. Any error status keeps the provider parked: a 429 (still
         rate-limited) **and** a 5xx (still overloaded) alike — resuming on a
         non-2xx would march parked agents straight back into the failure. A
         network error stays parked too (retry next sweep). When the provider
-        can't be probed (no key / unknown), fall back to time-expiry optimism:
+        can't be probed (Anthropic / unknown), fall back to time-expiry optimism:
         the caller only reaches this after ``estimated_lift_at`` has passed.
 
         Injectable boundary — tests monkeypatch this to force outcomes.

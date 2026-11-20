@@ -445,31 +445,6 @@ async def test_b10_wiring_confident_verdict_replaces_regex(
 
 
 @pytest.mark.asyncio
-async def test_b10_wiring_all_confident_skips_full_llm_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(cfg.settings, "decisions_enabled", True)
-    service = ExtractionService()
-    monkeypatch.setattr(
-        pc,
-        "segment_classify",
-        AsyncMock(return_value=[("action", 0.9), ("blocker", 0.9)]),
-    )
-    called = AsyncMock()
-    monkeypatch.setattr(service, "_call_anthropic_with_retry", called)
-    ctx = ExtractionContext(
-        content="Running the migration now.\n\nError: connection refused.",
-        agent_id=uuid4(),
-        channel_id=uuid4(),
-        session_id=uuid4(),
-        group_id=uuid4(),
-    )
-    result = await service.extract_with_llm(ctx)
-    called.assert_not_awaited()
-    assert result.messages[0].type == MessageType.ACTION
-
-
-@pytest.mark.asyncio
 async def test_b10_wiring_partial_verdicts_stay_aligned(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

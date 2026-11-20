@@ -19,15 +19,15 @@ import httpx
 from fastapi import status as http_status
 
 from roboco.config import settings
+from roboco.models.runtime import (
+    AgentInstance,
+    WaitingRecord,
+)
 from roboco.runtime.engines.subscription_runs import (
     LOGIN_REQUIRED_EXIT_CODE,
     RATE_LIMIT_EXIT_CODE,
     SUBSCRIPTION_LOGIN_RETRY_AFTER_S,
     SUBSCRIPTION_RATE_LIMIT_RETRY_AFTER_S,
-)
-from roboco.models.runtime import (
-    AgentInstance,
-    WaitingRecord,
 )
 from roboco.runtime.orchestrator import (
     _ANTHROPIC_AUTH_MARKERS,
@@ -1980,11 +1980,10 @@ class SpawnExitEngine(_Base):
         """Provider to park if this dead run hit an expired host auth credential.
 
         Anthropic only: the Claude Code OAuth session backing the mounted
-        ``~/.claude`` credential store expired and could not be refreshed. With
-        no ``settings.anthropic_api_key`` the recovery probe
-        (``_probe_target``) cannot run and falls back to time-expiry
-        optimism, so a still-dead credential re-parks once per retry window
-        (bounded burn, zero tokens) until the operator logs in.
+        ``~/.claude`` credential store expired and could not be refreshed. The
+        recovery probe (``_probe_target``) never probes Anthropic and falls
+        back to time-expiry optimism, so a still-dead credential re-parks once
+        per retry window (bounded burn, zero tokens) until the operator logs in.
         """
         from roboco.models.base import ModelProvider
 

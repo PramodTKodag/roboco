@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import Any
 from uuid import uuid4
 
-import anthropic as anthropic_mod
 import pytest
-from roboco.llm import ToonAdapter
 from roboco.models import MessageType
 from roboco.models.extraction import (
     ExtractionConfig,
@@ -248,92 +246,3 @@ async def test_extract_skips_empty_segments_from_segmenter(
     assert len(result.messages) == 1
 
 
-# ---------------------------------------------------------------------------
-# extract_with_llm (lines 323-404)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_extract_with_llm_falls_back_on_error(
-    svc: ExtractionService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """If the Anthropic call fails, falls back to pattern-based extract."""
-
-    class _BadClient:
-        def __init__(self, **_kwargs: object) -> None:
-            self.messages = self
-
-        async def create(self, **_kwargs: object) -> object:
-            raise RuntimeError("API down")
-
-    monkeypatch.setattr(anthropic_mod, "AsyncAnthropic", _BadClient)
-    result = await svc.extract_with_llm(_ctx("I'm thinking about this."))
-    # Pattern fallback path executes; messages list is not empty.
-    assert result is not None
-    assert len(result.messages) >= 1
-
-
-@pytest.mark.asyncio
-async def test_extract_with_llm_parses_response(
-    svc: ExtractionService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Mock a successful LLM response and verify it gets parsed."""
-
-    class _Block:
-        text = "json-or-toon"
-
-    class _Resp:
-        content: ClassVar = [_Block()]
-
-    class _OkClient:
-        def __init__(self, **_kwargs: object) -> None:
-            self.messages = self
-
-        async def create(self, **_kwargs: object) -> _Resp:
-            return _Resp()
-
-    def _decode_dicts(_self: ToonAdapter, _text: str) -> list[dict[str, object]]:
-        return [
-            {"type": "reasoning", "content": "thinking", "confidence": 0.9},
-            {"type": "action", "content": "doing", "confidence": 0.95},
-        ]
-
-    monkeypatch.setattr(anthropic_mod, "AsyncAnthropic", _OkClient)
-    monkeypatch.setattr(ToonAdapter, "decode", _decode_dicts)
-
-    result = await svc.extract_with_llm(_ctx("Some content for the LLM."))
-    assert result is not None
-    _COUNT = 2
-    assert len(result.messages) == _COUNT
-
-
-@pytest.mark.asyncio
-async def test_extract_with_llm_handles_non_dict_segments(
-    svc: ExtractionService, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """When the toon decoder returns non-dict segments, fallback type."""
-
-    class _Block:
-        text = "raw response"
-
-    class _Resp:
-        content: ClassVar = [_Block()]
-
-    class _OkClient:
-        def __init__(self, **_kwargs: object) -> None:
-            self.messages = self
-
-        async def create(self, **_kwargs: object) -> _Resp:
-            return _Resp()
-
-    # Patch toon to yield strings instead of dicts.
-    def _decode_strings(_self: ToonAdapter, _text: str) -> list[str]:
-        return ["plain string segment", "another"]
-
-    monkeypatch.setattr(anthropic_mod, "AsyncAnthropic", _OkClient)
-    monkeypatch.setattr(ToonAdapter, "decode", _decode_strings)
-
-    result = await svc.extract_with_llm(_ctx("Some content for the LLM."))
-    assert result is not None
-    _COUNT = 2
-    assert len(result.messages) == _COUNT

@@ -16,7 +16,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-import anthropic as anthropic_mod
 import httpx
 import pytest
 import pytest_asyncio  # noqa: F401 - registers asyncio mode
@@ -31,7 +30,6 @@ from roboco.services.exceptions import (
     RateLimitError,
     parse_retry_after_header,
 )
-from roboco.services.extraction import ExtractionService
 from roboco.services.optimal_brain.indexes.journals import (
     JournalsIndexPlugin,
 )
@@ -109,19 +107,6 @@ def _make_extraction_context() -> ExtractionContext:
         channel_id=uuid4(),
         session_id=uuid4(),
         group_id=uuid4(),
-    )
-
-
-def _make_anthropic_rl_exc(
-    retry_after: str | None = None,
-) -> anthropic_mod.RateLimitError:
-    """Build a minimal anthropic.RateLimitError."""
-    fake_resp = MagicMock()
-    fake_resp.headers = {} if retry_after is None else {"retry-after": retry_after}
-    return anthropic_mod.RateLimitError(
-        message="rate limit",
-        response=fake_resp,
-        body={},
     )
 
 
@@ -411,97 +396,6 @@ class TestOllamaEmbedBatchSync:
             embedder._embed_batch_sync(mock_client, ["a"], batch_index=0)
 
         assert mock_client.post.call_count == MAX_RETRIES
-
-
-# ===========================================================================
-# 6. extraction.py - Anthropic rate-limit retry
-# ===========================================================================
-
-
-class TestExtractionAnthropicRetry:
-    """Tests for ExtractionService.extract_with_llm Anthropic retry logic.
-
-    AsyncAnthropic is imported *inside* extract_with_llm, so we patch at the
-    anthropic module level. The client is NOT used as a context manager there.
-    """
-
-    async def test_five_rate_limit_errors_raises_rate_limit_error(self) -> None:
-        """RateLimitError raised 5 times -> our RateLimitError propagated."""
-        svc = ExtractionService()
-        api_exc = _make_anthropic_rl_exc(retry_after="5")
-
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(side_effect=api_exc)
-
-        with (
-            patch("anthropic.AsyncAnthropic") as mock_cls,
-            patch("roboco.config.settings") as mock_settings,
-            patch("asyncio.sleep", new_callable=AsyncMock),
-            pytest.raises(RateLimitError) as exc_info,
-        ):
-            mock_cls.return_value = mock_client
-            mock_settings.anthropic_api_key = "test-key"
-            await svc.extract_with_llm(_make_extraction_context())
-
-        assert exc_info.value.provider == "anthropic"
-        assert mock_client.messages.create.call_count == MAX_RATE_LIMIT_RETRIES
-
-    async def test_retry_after_header_drives_sleep_duration(self) -> None:
-        """Retry-After: 12 -> asyncio.sleep(12) called on each gap."""
-        svc = ExtractionService()
-        sleep_calls: list[float] = []
-        api_exc = _make_anthropic_rl_exc(retry_after="12")
-
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(side_effect=api_exc)
-
-        async def _fake_sleep(secs: float) -> None:
-            sleep_calls.append(secs)
-
-        with (
-            patch("anthropic.AsyncAnthropic") as mock_cls,
-            patch("roboco.config.settings") as mock_settings,
-            patch("asyncio.sleep", side_effect=_fake_sleep),
-            pytest.raises(RateLimitError),
-        ):
-            mock_cls.return_value = mock_client
-            mock_settings.anthropic_api_key = "test-key"
-            await svc.extract_with_llm(_make_extraction_context())
-
-        assert all(s == _RETRY_AFTER_12 for s in sleep_calls)
-        assert len(sleep_calls) == MAX_RATE_LIMIT_RETRIES - 1
-
-    async def test_partial_rate_limit_then_success_returns_result(self) -> None:
-        """Two RateLimitErrors then success -> result returned, no raise."""
-        svc = ExtractionService()
-        api_exc = _make_anthropic_rl_exc()
-
-        text_block = MagicMock()
-        text_block.text = "[N,]{type,content,confidence}:\nreasoning,Hello world,0.9"
-        success_response = MagicMock()
-        success_response.content = [text_block]
-
-        mock_client = MagicMock()
-        mock_client.messages.create = AsyncMock(
-            side_effect=[api_exc, api_exc, success_response]
-        )
-
-        raised = False
-        with (
-            patch("anthropic.AsyncAnthropic") as mock_cls,
-            patch("roboco.config.settings") as mock_settings,
-            patch("asyncio.sleep", new_callable=AsyncMock),
-        ):
-            mock_cls.return_value = mock_client
-            mock_settings.anthropic_api_key = "test-key"
-            try:
-                result = await svc.extract_with_llm(_make_extraction_context())
-                assert result is not None
-            except RateLimitError:
-                raised = True
-
-        assert not raised, "RateLimitError raised even though 3rd attempt succeeded"
-        assert mock_client.messages.create.call_count == _CALLS_2RL_1_SUCCESS
 
 
 # ===========================================================================

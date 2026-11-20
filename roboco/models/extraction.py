@@ -58,9 +58,6 @@ class ExtractionConfig:
     # Confidence threshold for pattern matching
     min_pattern_confidence: float = 0.5
 
-    # Whether to use LLM for classification (future)
-    use_llm_classification: bool = False
-
     # Maximum segments to extract from a single buffer
     max_segments_per_buffer: int = 20
 

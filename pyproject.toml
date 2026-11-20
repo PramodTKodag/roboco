@@ -25,7 +25,6 @@ dependencies = [
     "redis",
     "hiredis",  # Redis performance
     # AI/LLM
-    "anthropic",
     "openai",  # For embeddings
     "tiktoken",  # Token counting
     "python-toon",  # Token-efficient LLM serialization
@@ -428,7 +427,6 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = [
     "redis.*",
-    "anthropic.*",
     "toon.*",
     "sse_starlette.*",
     "asyncpg.*",

@@ -21,7 +21,6 @@ from roboco.services.decisions.client import (
 )
 from roboco.services.decisions.schemas import DecisionResult, NoulQuestion
 
-
 _LAYA = DecisionsEndpoint(
     tier="laya",
     base_url="http://roboco-decisions:8100",

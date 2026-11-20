@@ -188,7 +188,6 @@ SDK_PORT: int = 9000
 # provider is accepting requests again before parked agents are resumed.
 # Listing models / tags costs no tokens; only a 2xx response means recovered
 # (a 429 rate limit OR a 5xx overload both keep the provider parked).
-_ANTHROPIC_PROBE_BASE = "https://api.anthropic.com"
 _PROBE_TIMEOUT_SECONDS = 10.0
 # Docker subprocess deadlines for the reaper path. A hung Docker daemon or a
 # stuck container FS would otherwise freeze the single asyncio event loop: the
@@ -1260,7 +1259,7 @@ class AgentOrchestrator(
     _uptime_loaded_at: datetime | None = None
     # Supervisor for delivery agents running as model runs. None until first
     # use (and for a bare __new__ test double), meaning no agent is supervised.
-    _run_supervisor: RunSupervisor | None = None
+    _run_supervisor: "RunSupervisor | None" = None
 
     def __new__(cls, *_args: Any, **_kwargs: Any) -> "AgentOrchestrator":
         """Allocate the instance and pre-initialize lazy dispatcher state.

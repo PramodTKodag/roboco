@@ -125,16 +125,11 @@ def _bridge_server(
     }
 
 
-def _verb_server(
-    *,
-    python: Path,
-    server: VerbServer,
-    credentials: VerbCredentials,
-    orchestrator_url: str,
-    manifest_file: Path,
-    session_id: str | None,
-) -> dict[str, Any]:
-    env = {
+def _verb_env(
+    credentials: VerbCredentials, orchestrator_url: str, manifest_file: Path
+) -> dict[str, str]:
+    """Environment every verb server shares; secrets stay in this one map."""
+    return {
         "PYTHONPATH": str(_IMPORT_ROOT),
         "ROBOCO_AGENT_ID": str(credentials.agent_id),
         "ROBOCO_AGENT_ROLE": credentials.role,
@@ -143,6 +138,16 @@ def _verb_server(
         "ROBOCO_TOOL_MANIFEST_PATH": str(manifest_file),
         _CHAT_API_URL_ENV: orchestrator_url,
     }
+
+
+def _verb_server(
+    *,
+    python: Path,
+    server: VerbServer,
+    shared_env: dict[str, str],
+    session_id: str | None,
+) -> dict[str, Any]:
+    env = dict(shared_env)
     if server is VerbServer.INTAKE and session_id is not None:
         env[_CHAT_SESSION_ENV] = session_id
     return {
@@ -171,13 +176,12 @@ def build_mcp_config(  # noqa: PLR0913 - one builder for every trusted server
             python=python, socket_path=socket_path, capability=capability
         )
     if manifest is not None and credentials is not None:
+        shared_env = _verb_env(credentials, orchestrator_url, manifest_file)
         for grant in manifest.verb_grants:
             servers[verb_server_name(grant.server)] = _verb_server(
                 python=python,
                 server=grant.server,
-                credentials=credentials,
-                orchestrator_url=orchestrator_url,
-                manifest_file=manifest_file,
+                shared_env=shared_env,
                 session_id=session_id,
             )
     return {"mcpServers": servers}
