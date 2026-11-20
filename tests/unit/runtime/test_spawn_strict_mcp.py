@@ -1,0 +1,93 @@
+"""Wave E3: agent spawn cmd uses --strict-mcp-config to suppress builtin
+Anthropic connectors (Gmail / Google Calendar / Notion / Google Drive).
+
+Without --strict-mcp-config, the Claude Code CLI auto-registers its
+builtin MCP connectors alongside our --mcp-config entries — they appear
+in the agent's tool inventory as `mcp__claude_ai_Gmail__authenticate`
+etc. The flag tells the CLI to load ONLY the servers from --mcp-config.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+from roboco.config import settings
+from roboco.models.runtime import OrchestratorAgentConfig, SpawnGitContext
+from roboco.runtime.orchestrator import AgentOrchestrator
+
+_MAX_FLAG_ADJACENCY = 3
+
+
+def _make_dev_config() -> OrchestratorAgentConfig:
+    """Minimal AgentConfig for a developer."""
+    return OrchestratorAgentConfig(
+        agent_id="be-dev-1",
+        blueprint_path=Path("/app/agents/blueprints/be-dev-1.md"),
+        model="sonnet",
+        mcp_config_path=Path("/app/mcp-config.json"),
+        git_context=SpawnGitContext(
+            project_slug="roboco-api",
+            branch_name="feature/backend/TASK0001",
+        ),
+    )
+
+
+class TestMcpConfigPinsBakedVenv:
+    """#179: every generated MCP server launch must pin uv to the baked
+    image venv so `uv run` (cwd = workspace) reuses /app/.venv instead of
+    re-syncing the full dependency set (~350MB) on every spawn."""
+
+    @pytest.mark.asyncio
+    async def test_every_mcp_server_env_pins_uv_project_environment(self) -> None:
+        orch = AgentOrchestrator.__new__(AgentOrchestrator)
+        # be-dev-1 is a known agent (resolves role + uuid); generation is
+        # otherwise pure (writes a json file and returns its path).
+        config_path = await orch._generate_mcp_config("be-dev-1")
+        config = json.loads(Path(config_path).read_text())
+        servers = config["mcpServers"]
+        assert servers, "expected at least the four core MCP servers"
+        for name, spec in servers.items():
+            assert spec["command"] == "uv", f"{name} should launch via uv"
+            assert spec["env"].get("UV_PROJECT_ENVIRONMENT") == "/app/.venv", (
+                f"MCP server {name!r} is missing UV_PROJECT_ENVIRONMENT="
+                f"/app/.venv — without it `uv run` re-downloads deps into a "
+                f"cwd-relative venv on every spawn (#179). env={spec['env']}"
+            )
+            # Pinning the env location is necessary but NOT sufficient: from a
+            # workspace-clone cwd `uv run` still discovers the clone project and
+            # re-syncs the pinned venv against its drifted lock, which stalls and
+            # leaves the server stuck at status="pending" (zero gateway verbs).
+            # `--no-sync` skips that resync — it must come right after `run`.
+            assert spec["args"][:2] == ["run", "--no-sync"], (
+                f"MCP server {name!r} must launch with `uv run --no-sync ...` so "
+                f"a drifted workspace-clone lock can't trigger a resync stall; "
+                f"got args={spec['args']}"
+            )
+            # cwd = the agent's workspace, often a RoboCo clone. Without this,
+            # cwd lands on sys.path[0] and a stale/foreign clone's `roboco`
+            # package shadows the image's installed one in /app/.venv,
+            # crashing the server on import.
+            assert spec["env"].get("PYTHONSAFEPATH") == "1", (
+                f"MCP server {name!r} is missing PYTHONSAFEPATH=1. cwd is "
+                f"the agent's workspace, so a stale/foreign clone's `roboco` "
+                f"package can shadow the image's installed one. "
+                f"env={spec['env']}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_mcp_env_mirrors_flow_verb_timeout_settings(self) -> None:
+        """flow_server.py (a subprocess, can't read Settings) mirrors the two
+        server-side flow-verb timeout budgets via env so its client timeout
+        stays coherent with operator tuning of either setting."""
+        orch = AgentOrchestrator.__new__(AgentOrchestrator)
+        config_path = await orch._generate_mcp_config("be-dev-1")
+        config = json.loads(Path(config_path).read_text())
+        env = config["mcpServers"]["roboco-flow"]["env"]
+        assert env["ROBOCO_FLOW_VERB_TIMEOUT_SECONDS"] == str(
+            settings.flow_verb_timeout_seconds
+        )
+        assert env["ROBOCO_FLOW_VERB_SLOW_TIMEOUT_SECONDS"] == str(
+            settings.flow_verb_slow_timeout_seconds
+        )
