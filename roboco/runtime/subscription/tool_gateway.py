@@ -6,6 +6,8 @@ a run, project, workspace or job identity, and any such field fails validation.
 Authorized requests become ``WorkerJob`` values executed only by the offline
 worker through the launcher. Capabilities expire with the run, are revoked on
 cancellation, and a missing or empty manifest on a delivery run refuses the run.
+Business verbs are not authorized here: they run in their own trusted MCP servers
+with an orchestrator-minted credential, and the orchestrator enforces them.
 """
 
 from __future__ import annotations
@@ -84,16 +86,23 @@ def _utc_now() -> datetime:
 
 
 def _grant_for(request: RunRequest, expires_at: datetime) -> RunGrant | None:
-    """The grant for a delivery run, ``None`` for a legitimately tool-free run."""
+    """The worker grant for a delivery run; ``None`` when it needs no worker.
+
+    A delivery run must be granted something: worker operations, business verbs
+    or both. Only worker operations need a project workspace.
+    """
     spec = request.spec
     manifest = request.manifest
     operations = frozenset(manifest.operations) if manifest else frozenset()
+    has_verbs = bool(manifest and manifest.verb_grants)
     if spec.purpose != "delivery":
         if operations:
             raise ToolDenied("tools_not_allowed_for_purpose")
         return None
-    if not operations:
+    if not operations and not has_verbs:
         raise ToolDenied("manifest_missing")
+    if not operations:
+        return None
     if spec.project_id is None or spec.workspace_handle is None:
         raise ToolDenied("workspace_required")
     return RunGrant(

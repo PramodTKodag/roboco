@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from roboco.foundation.policy.flow_names import public_flow_verb
 
 if TYPE_CHECKING:
     import types
@@ -85,15 +86,13 @@ def test_pass_and_fail_register_under_public_names(
     assert "fail_review" not in registered
 
 
-def test_intent_public_mapping_used_on_unknowns(
-    flow_module_qa: types.ModuleType,
-) -> None:
+def test_intent_public_mapping_used_on_unknowns() -> None:
     """Unmapped verbs not in _TOOLS surface as unknown; mapped ones don't."""
     # pass_review and fail_review must NOT appear in the 'unknown' warning log
     # because they map to pass/fail which ARE in _TOOLS.
-    public_map = flow_module_qa._INTENT_TO_PUBLIC
-    assert public_map["pass_review"] == "pass"
-    assert public_map["fail_review"] == "fail"
+    assert public_flow_verb("pass_review") == "pass"
+    assert public_flow_verb("fail_review") == "fail"
+    assert public_flow_verb("i_am_done") == "i_am_done"
 
 
 def test_post_to_correct_orchestrator_path(

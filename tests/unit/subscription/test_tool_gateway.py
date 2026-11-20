@@ -12,6 +12,9 @@ from roboco.runtime.subscription.contracts import (
     RunRequest,
     RunSpec,
     ToolManifest,
+    VerbCredentials,
+    VerbGrant,
+    VerbServer,
     WorkerJob,
     WorkerOperation,
     WorkerResult,
@@ -123,6 +126,26 @@ def test_tool_free_purposes_never_inherit_delivery_tools(
     with pytest.raises(ToolDenied) as denied:
         gateway.bind(_request(purpose=purpose, operations=READ_ONLY))
     assert denied.value.reason_code == "tools_not_allowed_for_purpose"
+
+
+def test_a_verb_only_delivery_run_needs_no_worker_capability(
+    gateway: ToolGateway,
+) -> None:
+    request = RunRequest(
+        spec=RunSpec(
+            run_id=uuid4(),
+            purpose="delivery",
+            model="claude-sonnet-5-5",
+            prompt="p",
+        ),
+        manifest=ToolManifest(
+            verb_grants=(VerbGrant(server=VerbServer.FLOW, verbs=("i_am_done",)),)
+        ),
+        verb_credentials=VerbCredentials(
+            agent_id=uuid4(), role="backend_dev", token="synthetic-run-token-0123456789"
+        ),
+    )
+    assert gateway.bind(request) is None
 
 
 def test_validate_changes_nothing(gateway: ToolGateway) -> None:

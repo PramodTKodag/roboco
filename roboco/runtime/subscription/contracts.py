@@ -17,6 +17,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictInt,
+    StringConstraints,
     field_validator,
     model_validator,
 )
@@ -115,10 +116,48 @@ class RunSpec(_Frozen):
         return value
 
 
+class VerbServer(StrEnum):
+    """The trusted MCP servers that expose business verbs to a run.
+
+    The module behind each name is fixed in the service, so a controller can grant
+    verbs but never choose what code the CLI launches.
+    """
+
+    FLOW = "flow"
+    DO = "do"
+
+
+_VERB_NAME = r"^[a-z][a-z0-9_]{0,63}$"
+_SERVERS_ALLOWED_FOR_PURPOSE: dict[str, frozenset[VerbServer]] = {
+    "delivery": frozenset({VerbServer.FLOW, VerbServer.DO}),
+    "intake": frozenset(),
+    "secretary": frozenset(),
+    "background": frozenset(),
+}
+
+
+class VerbGrant(_Frozen):
+    """The exact verbs one trusted MCP server may expose to a run."""
+
+    server: VerbServer
+    verbs: tuple[Annotated[str, StringConstraints(pattern=_VERB_NAME)], ...]
+
+    @field_validator("verbs")
+    @classmethod
+    def _verbs_are_unique_and_present(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value or len(set(value)) != len(value):
+            raise ValueError("a verb grant needs unique, non-empty verbs")
+        return value
+
+
 class ToolManifest(_Frozen):
-    """The worker operations one run may use; empty means a tool-free run."""
+    """What one run may use: worker operations and business verbs.
+
+    Empty means a tool-free run.
+    """
 
     operations: tuple[WorkerOperation, ...] = ()
+    verb_grants: tuple[VerbGrant, ...] = ()
 
     @field_validator("operations")
     @classmethod
@@ -129,16 +168,59 @@ class ToolManifest(_Frozen):
             raise ValueError("manifest operations must be unique")
         return value
 
+    @field_validator("verb_grants")
+    @classmethod
+    def _one_grant_per_server(
+        cls, value: tuple[VerbGrant, ...]
+    ) -> tuple[VerbGrant, ...]:
+        servers = [grant.server for grant in value]
+        if len(set(servers)) != len(servers):
+            raise ValueError("a server may appear in only one verb grant")
+        return value
+
+
+class VerbCredentials(_Frozen):
+    """The orchestrator-minted, short-lived identity a run's verb servers use.
+
+    Held only by the trusted service and handed to the verb servers' environment,
+    never to the model. The token is bound by the orchestrator to this agent and
+    run; the service does not interpret it.
+    """
+
+    agent_id: UUID
+    role: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{1,40}$")]
+    token: Annotated[str, StringConstraints(min_length=16, max_length=2048)] = Field(
+        repr=False
+    )
+
 
 class RunRequest(_Frozen):
     """A run plus the tool manifest the controller grants it.
 
     A delivery run without a manifest is refused by the service: it never falls
-    back to a default tool set.
+    back to a default tool set. Verb grants need verb credentials, and the servers
+    a purpose may use are fixed by ``servers_allowed_for``.
     """
 
     spec: RunSpec
     manifest: ToolManifest | None = None
+    verb_credentials: VerbCredentials | None = None
+
+    @model_validator(mode="after")
+    def _verbs_match_purpose_and_credentials(self) -> Self:
+        grants = self.manifest.verb_grants if self.manifest else ()
+        if not grants:
+            return self
+        if self.verb_credentials is None:
+            raise ValueError("verb grants require verb credentials")
+        allowed = servers_allowed_for(self.spec.purpose)
+        if any(grant.server not in allowed for grant in grants):
+            raise ValueError("verb server is not allowed for this purpose")
+        return self
+
+
+def servers_allowed_for(purpose: str) -> frozenset[VerbServer]:
+    return _SERVERS_ALLOWED_FOR_PURPOSE.get(purpose, frozenset())
 
 
 class RunResult(_Frozen):

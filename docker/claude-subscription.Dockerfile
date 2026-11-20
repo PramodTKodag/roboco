@@ -20,8 +20,11 @@ RUN pip install --require-hashes --no-deps -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
 # Only the service's import closure (enforced by a test).
-COPY roboco/__init__.py roboco/config.py roboco/exceptions.py roboco/logging.py /opt/service/roboco/
+COPY roboco/__init__.py roboco/agents_config.py roboco/config.py roboco/exceptions.py roboco/logging.py /opt/service/roboco/
 COPY roboco/foundation /opt/service/roboco/foundation
+COPY roboco/models /opt/service/roboco/models
+COPY roboco/seeds /opt/service/roboco/seeds
+COPY roboco/mcp/__init__.py roboco/mcp/flow_server.py roboco/mcp/do_server.py roboco/mcp/utils.py /opt/service/roboco/mcp/
 COPY roboco/runtime/__init__.py /opt/service/roboco/runtime/__init__.py
 COPY roboco/runtime/subscription /opt/service/roboco/runtime/subscription
 

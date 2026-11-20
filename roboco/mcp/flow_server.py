@@ -27,6 +27,7 @@ from pydantic import BeforeValidator
 
 from roboco.agents_config import get_agent_team
 from roboco.foundation.policy.content.validators import coerce_str_list
+from roboco.foundation.policy.flow_names import public_flow_verb
 from roboco.foundation.policy.flow_timeouts import CLIENT_HEADROOM_SECONDS, SLOW_VERBS
 from roboco.mcp.utils import configure_stdio_logging, guard_blocked_envelope
 
@@ -1192,15 +1193,6 @@ _TOOLS: dict[str, Any] = {
 
 
 # IntentSpec verb names → MCP public tool names. The IntentSpec layer uses
-# Python-friendly identifiers (no reserved keywords); the MCP layer exposes
-# the user-facing verb name. Dogfooding surfaced this gap: the manifest carried
-# `pass_review`/`fail_review` (IntentSpec names) but flow_server only had
-# `pass`/`fail` keys, so QA's tools were silently dropped at registration.
-_INTENT_TO_PUBLIC: dict[str, str] = {
-    "pass_review": "pass",
-    "fail_review": "fail",
-}
-
 
 def _load_manifest_flow_tools() -> list[str] | None:
     """Read the spawn manifest and return its ``flow_tools`` list.
@@ -1271,7 +1263,7 @@ def _register_tools() -> list[str]:
                 "flow_server: manifest missing", role=AGENT_ROLE, path=manifest_path
             )
             raise RuntimeError(msg)
-    public = [_INTENT_TO_PUBLIC.get(verb, verb) for verb in allowed]
+    public = [public_flow_verb(verb) for verb in allowed]
     unknown = [verb for verb in public if verb not in _TOOLS]
     if unknown:
         log.warning(

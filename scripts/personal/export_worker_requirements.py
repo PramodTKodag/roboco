@@ -3,7 +3,8 @@
 The credential-free task worker imports only the run contracts and the
 conventions validator, so it needs just the worker packages (pydantic for the
 contracts, tree-sitter for the validator). The Claude service image additionally
-needs the MCP SDK and its dependencies for the worker-tools bridge.
+needs the MCP SDK and its dependencies for the worker-tools bridge and the
+flow and do servers.
 Versions and hashes come straight from the project's lockfile via ``uv export``;
 nothing is resolved fresh. Usage:
 
@@ -31,15 +32,19 @@ WORKER_PACKAGES = (
     "typing-extensions",
     "typing-inspection",
 )
-# The MCP SDK's dependency closure (the stdio bridge is the only importer).
+# The MCP SDK's dependency closure plus the HTTP client the flow and do servers use
+# (the stdio bridge and those servers are the only importers).
 MCP_PACKAGES = (
     "anyio",
     "attrs",
+    "certifi",
     "cffi",
     "click",
     "cryptography",
     "h11",
+    "httpcore",
     "httpcore2",
+    "httpx",
     "httpx2",
     "idna",
     "jsonschema",

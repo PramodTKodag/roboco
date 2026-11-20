@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from datetime import UTC, datetime
@@ -22,6 +23,9 @@ from roboco.runtime.subscription.contracts import (
     SubscriptionState,
     SubscriptionStatus,
     ToolManifest,
+    VerbCredentials,
+    VerbGrant,
+    VerbServer,
     WorkerJob,
     WorkerOperation,
     WorkerResult,
@@ -83,11 +87,25 @@ _READ_ONLY_MANIFEST = ToolManifest(operations=(WorkerOperation.READ_FILE,))
 _EXPECTED_INSPECTIONS = 2
 
 
+_VERB_TOKEN = "synthetic-run-token-0123456789"
+_VERB_MANIFEST = ToolManifest(
+    verb_grants=(
+        VerbGrant(server=VerbServer.FLOW, verbs=("i_am_done", "pass_review")),
+        VerbGrant(server=VerbServer.DO, verbs=("read_task",)),
+    )
+)
+
+
+def _verb_credentials() -> VerbCredentials:
+    return VerbCredentials(agent_id=uuid4(), role="backend_dev", token=_VERB_TOKEN)
+
+
 def _request(
     *,
     purpose: str = "delivery",
     manifest: ToolManifest | None = _READ_ONLY_MANIFEST,
     run_id: UUID | None = None,
+    verb_credentials: VerbCredentials | None = None,
 ) -> RunRequest:
     delivery = purpose == "delivery"
     spec = RunSpec(
@@ -98,7 +116,11 @@ def _request(
         prompt=PROMPT,
         workspace_handle=uuid4() if delivery else None,
     )
-    return RunRequest(spec=spec, manifest=manifest if delivery else None)
+    return RunRequest(
+        spec=spec,
+        manifest=manifest if delivery else None,
+        verb_credentials=verb_credentials,
+    )
 
 
 class Harness:
@@ -212,6 +234,45 @@ async def test_delivery_run_gets_only_the_bridge_and_the_granted_tool(
         GATEWAY_SOCKET_ENV,
         RUN_CAPABILITY_ENV,
     }
+
+
+async def test_verb_only_run_gets_verb_servers_and_no_worker_bridge(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path, orchestrator_url="http://orchestrator:8000")
+    request = _request(manifest=_VERB_MANIFEST, verb_credentials=_verb_credentials())
+    result = await harness.service.run(request)
+    assert result.state is RunState.COMPLETED
+    (record,) = harness.started()
+    assert record["settings"]["permissions"]["allow"] == [
+        "mcp__roboco_do__read_task",
+        "mcp__roboco_flow__i_am_done",
+        "mcp__roboco_flow__pass",
+    ]
+    servers = record["mcp_config"]["mcpServers"]
+    assert set(servers) == {"roboco_flow", "roboco_do"}
+    assert WORKER_MCP_SERVER_NAME not in servers
+
+
+async def test_verb_credentials_stay_out_of_argv_and_the_manifest_file(
+    tmp_path: Path,
+) -> None:
+    harness = Harness(tmp_path, orchestrator_url="http://orchestrator:8000")
+    request = _request(manifest=_VERB_MANIFEST, verb_credentials=_verb_credentials())
+    await harness.service.run(request)
+    (record,) = harness.started()
+    assert _VERB_TOKEN not in " ".join(record["argv"])
+    assert _VERB_TOKEN not in json.dumps(record["settings"])
+
+
+async def test_verb_run_without_an_orchestrator_is_refused_before_the_cli(
+    harness: Harness,
+) -> None:
+    request = _request(manifest=_VERB_MANIFEST, verb_credentials=_verb_credentials())
+    result = await harness.service.run(request)
+    assert result.state is RunState.BLOCKED
+    assert result.reason_code == "orchestrator_not_configured"
+    assert harness.started() == []
 
 
 async def test_run_files_are_removed_and_the_capability_revoked(

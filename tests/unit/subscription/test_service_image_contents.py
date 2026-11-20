@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import subprocess
 import sys
@@ -25,7 +26,15 @@ _spec.loader.exec_module(export_script)
 _ENTRYPOINTS = (
     "roboco.runtime.subscription.service_main",
     "roboco.runtime.subscription.worker_tools_mcp",
+    "roboco.mcp.flow_server",
+    "roboco.mcp.do_server",
 )
+_VERB_SERVER_ENV = {
+    "ROBOCO_AGENT_ID": "00000000-0000-0000-0000-000000000001",
+    "ROBOCO_AGENT_ROLE": "backend_dev",
+    "ROBOCO_AGENT_TOKEN": "synthetic-run-token-0123456789",
+    "ROBOCO_ORCHESTRATOR_URL": "http://orchestrator.invalid",
+}
 _FORBIDDEN_PREFIXES = (
     "roboco.api",
     "roboco.services",
@@ -42,14 +51,27 @@ def _closure_probe(entrypoint: str) -> str:
     )
 
 
-def _imported_roboco_modules(entrypoint: str) -> list[str]:
+def _imported_roboco_modules(entrypoint: str, manifest: Path) -> list[str]:
+    env = {
+        **os.environ,
+        **_VERB_SERVER_ENV,
+        "ROBOCO_TOOL_MANIFEST_PATH": str(manifest),
+    }
     return subprocess.run(
         [sys.executable, "-P", "-c", _closure_probe(entrypoint)],
         cwd=_REPO_ROOT,
+        env=env,
         capture_output=True,
         text=True,
         check=True,
     ).stdout.split()
+
+
+@pytest.fixture
+def verb_manifest(tmp_path: Path) -> Path:
+    path = tmp_path / "tool-manifest.json"
+    path.write_text('{"flow_tools": [], "do_tools": []}')
+    return path
 
 
 def _copied_sources() -> list[str]:
@@ -71,19 +93,23 @@ def _module_is_copied(module: str, sources: list[str]) -> bool:
 
 
 @pytest.mark.parametrize("entrypoint", _ENTRYPOINTS)
-def test_every_roboco_module_an_entrypoint_imports_is_copied(entrypoint: str) -> None:
+def test_every_roboco_module_an_entrypoint_imports_is_copied(
+    entrypoint: str, verb_manifest: Path
+) -> None:
     sources = _copied_sources()
     missing = [
         m
-        for m in _imported_roboco_modules(entrypoint)
+        for m in _imported_roboco_modules(entrypoint, verb_manifest)
         if not _module_is_copied(m, sources)
     ]
     assert missing == []
 
 
 @pytest.mark.parametrize("entrypoint", _ENTRYPOINTS)
-def test_entrypoints_never_import_application_code(entrypoint: str) -> None:
-    imported = _imported_roboco_modules(entrypoint)
+def test_entrypoints_never_import_application_code(
+    entrypoint: str, verb_manifest: Path
+) -> None:
+    imported = _imported_roboco_modules(entrypoint, verb_manifest)
     assert [m for m in imported if m.startswith(_FORBIDDEN_PREFIXES)] == []
 
 

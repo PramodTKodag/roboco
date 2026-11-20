@@ -27,8 +27,10 @@ from roboco.runtime.subscription.cli import (
     CLAUDE_BINARY,
     RUN_CWD,
     build_claude_argv,
+    TOOL_MANIFEST_FILE,
     build_mcp_config,
     build_settings,
+    build_tool_manifest_file,
     expected_tool_names,
 )
 from roboco.runtime.subscription.contracts import (
@@ -100,7 +102,9 @@ class ClaudeService:
         run_seconds: float = MAX_RUN_SECONDS,
         max_queued: int = MAX_QUEUED_RUNS,
         inspect: StatusInspector = inspect_subscription,
+        orchestrator_url: str = "",
     ) -> None:
+        self._orchestrator_url = orchestrator_url
         self._gateway = gateway
         self._runtime_dir = runtime_dir
         self._socket_path = socket_path
@@ -151,6 +155,9 @@ class ClaudeService:
             return "run_already_active"
         if self._waiting >= self._max_queued:
             return "queue_full"
+        manifest = request.manifest
+        if manifest and manifest.verb_grants and not self._orchestrator_url:
+            return "orchestrator_not_configured"
         try:
             self._gateway.validate(request)
         except ToolDenied as denied:
@@ -203,22 +210,10 @@ class ClaudeService:
         run_dir: Path,
         capability: str | None,
     ) -> Outcome:
-        operations = (
-            request.manifest.operations if capability and request.manifest else ()
-        )
+        manifest = request.manifest
         settings_file = run_dir / "settings.json"
-        _write_private(settings_file, build_settings(operations))
-        mcp_config: Path | None = None
-        if capability is not None:
-            mcp_config = run_dir / "mcp.json"
-            _write_private(
-                mcp_config,
-                build_mcp_config(
-                    python=self._python,
-                    socket_path=self._socket_path,
-                    capability=capability,
-                ),
-            )
+        _write_private(settings_file, build_settings(manifest))
+        mcp_config = self._write_mcp_config(request, run_dir, capability)
         argv = build_claude_argv(
             request.spec, mcp_config=mcp_config, settings_file=settings_file
         )
@@ -234,13 +229,38 @@ class ClaudeService:
             limit=MAX_STREAM_LINE_BYTES,
         )
         active.process = process
-        parser = StreamParser(expected_tools=expected_tool_names(operations))
+        parser = StreamParser(expected_tools=expected_tool_names(manifest))
         try:
             await self._send_prompt(process, request.spec.prompt)
             return await self._pump(process, parser, active)
         finally:
             _kill_group(process)
             await process.wait()
+
+    def _write_mcp_config(
+        self, request: RunRequest, run_dir: Path, capability: str | None
+    ) -> Path | None:
+        """Write the run's MCP config (and verb manifest); ``None`` if no servers."""
+        manifest = request.manifest
+        has_verbs = bool(manifest and manifest.verb_grants)
+        if capability is None and not has_verbs:
+            return None
+        manifest_file = run_dir / TOOL_MANIFEST_FILE
+        _write_private(manifest_file, build_tool_manifest_file(manifest))
+        mcp_config = run_dir / "mcp.json"
+        _write_private(
+            mcp_config,
+            build_mcp_config(
+                python=self._python,
+                socket_path=self._socket_path,
+                capability=capability,
+                manifest=manifest,
+                credentials=request.verb_credentials,
+                orchestrator_url=self._orchestrator_url,
+                manifest_file=manifest_file,
+            ),
+        )
+        return mcp_config
 
     @staticmethod
     async def _send_prompt(process: asyncio.subprocess.Process, prompt: str) -> None:

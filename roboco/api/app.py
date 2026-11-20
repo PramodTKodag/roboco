@@ -17,6 +17,7 @@ from roboco.api.auth.routes import mount_cloud_auth
 from roboco.api.auth.seed import ensure_seed_user_startup
 from roboco.api.deps import _auth_required, get_orchestrator_or_none
 from roboco.api.middleware import setup_middleware
+from roboco.api.run_scope import RunScopeMiddleware
 from roboco.api.routes.a2a import router as a2a_router
 from roboco.api.routes.a2a import wellknown_router as a2a_wellknown_router
 from roboco.api.routes.agents import router as agents_router
@@ -405,6 +406,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Run-scoped model-service tokens are honored only behind this gate.
+    app.add_middleware(RunScopeMiddleware)
 
     # Setup custom middleware (error handling, logging, correlation IDs)
     setup_middleware(app)

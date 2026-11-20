@@ -8,6 +8,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from roboco.runtime.subscription.gateway_socket import GatewayServer
 from roboco.runtime.subscription.launcher_client import WorkerLauncher
@@ -41,6 +42,7 @@ class ServiceSettings:
     launcher_executor_token: str
     runtime_dir: Path
     socket_path: Path
+    orchestrator_url: str
 
 
 def _required(env: Mapping[str, str], name: str) -> str:
@@ -55,6 +57,14 @@ def _read_token(env: Mapping[str, str], name: str) -> str:
         return Path(_required(env, name)).read_text(encoding="utf-8").strip()
     except OSError as exc:
         raise ServiceSettingsError(f"{name} file is unreadable") from exc
+
+
+def _orchestrator_url(env: Mapping[str, str]) -> str:
+    """The orchestrator the verb servers call; empty means verbs are refused."""
+    url = env.get("ROBOCO_ORCHESTRATOR_URL", "").strip()
+    if url and urlsplit(url).scheme not in {"http", "https"}:
+        raise ServiceSettingsError("ROBOCO_ORCHESTRATOR_URL must be an http(s) URL")
+    return url.rstrip("/")
 
 
 def load_service_settings(env: Mapping[str, str]) -> ServiceSettings:
@@ -83,6 +93,7 @@ def load_service_settings(env: Mapping[str, str]) -> ServiceSettings:
         socket_path=Path(
             env.get("ROBOCO_GATEWAY_SOCKET_PATH", str(DEFAULT_SOCKET_PATH))
         ),
+        orchestrator_url=_orchestrator_url(env),
     )
 
 
@@ -100,6 +111,7 @@ async def _serve(settings: ServiceSettings) -> None:
         gateway=gateway,
         runtime_dir=settings.runtime_dir,
         socket_path=settings.socket_path,
+        orchestrator_url=settings.orchestrator_url,
     )
     frontend = ServiceFrontend(service, token=settings.service_token)
     try:

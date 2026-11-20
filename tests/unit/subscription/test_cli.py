@@ -5,6 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+from pydantic import ValidationError
+
 from roboco.runtime.subscription.cli import (
     GATEWAY_SOCKET_ENV,
     RUN_CAPABILITY_ENV,
@@ -12,13 +15,20 @@ from roboco.runtime.subscription.cli import (
     build_claude_argv,
     build_mcp_config,
     build_settings,
+    build_tool_manifest_file,
     expected_tool_names,
     mcp_tool_name,
+    verb_tool_name,
 )
 from roboco.runtime.subscription.contracts import (
     CLI_MAX_RETRIES,
     MAX_RUN_TURNS,
+    RunRequest,
     RunSpec,
+    ToolManifest,
+    VerbCredentials,
+    VerbGrant,
+    VerbServer,
     WorkerOperation,
 )
 from roboco.runtime.subscription.policy import build_claude_env
@@ -107,27 +117,59 @@ def test_a_tool_free_run_has_no_mcp_config_but_stays_strict() -> None:
     assert _flag_value(argv, "--tools") == ""
 
 
+def _manifest(
+    operations: tuple[WorkerOperation, ...] = (),
+    **grants: tuple[str, ...],
+) -> ToolManifest:
+    return ToolManifest(
+        operations=operations,
+        verb_grants=tuple(
+            VerbGrant(server=VerbServer(server), verbs=verbs)
+            for server, verbs in grants.items()
+        ),
+    )
+
+
+def _credentials() -> VerbCredentials:
+    return VerbCredentials(
+        agent_id=uuid4(), role="backend_dev", token="synthetic-run-token-0123456789"
+    )
+
+
 def test_settings_allow_exactly_the_granted_tools() -> None:
-    granted = [WorkerOperation.READ_FILE, WorkerOperation.RUN_COMMAND]
-    allow = build_settings(granted)["permissions"]["allow"]
+    manifest = _manifest((WorkerOperation.READ_FILE, WorkerOperation.RUN_COMMAND))
+    allow = build_settings(manifest)["permissions"]["allow"]
     assert allow == sorted(
         [
             f"mcp__{WORKER_MCP_SERVER_NAME}__read_file",
             f"mcp__{WORKER_MCP_SERVER_NAME}__run_command",
         ]
     )
-    assert build_settings([])["permissions"]["allow"] == []
+    assert build_settings(None)["permissions"]["allow"] == []
 
 
 def test_settings_carry_nothing_but_permissions() -> None:
-    assert set(build_settings([WorkerOperation.READ_FILE])) == {"permissions"}
+    manifest = _manifest((WorkerOperation.READ_FILE,))
+    assert set(build_settings(manifest)) == {"permissions"}
 
 
 def test_expected_tool_names_are_compared_by_equality() -> None:
-    names = expected_tool_names([WorkerOperation.READ_FILE])
+    names = expected_tool_names(_manifest((WorkerOperation.READ_FILE,)))
     assert names == frozenset({mcp_tool_name(WorkerOperation.READ_FILE)})
     assert "mcp__roboco_worker__read_file_extra" not in names
     assert "mcp__roboco_worker" not in names
+
+
+def test_verb_tools_use_the_public_flow_name() -> None:
+    manifest = _manifest(flow=("i_am_done", "pass_review"), do=("commit",))
+    assert expected_tool_names(manifest) == frozenset(
+        {
+            "mcp__roboco_flow__i_am_done",
+            "mcp__roboco_flow__pass",
+            "mcp__roboco_do__commit",
+        }
+    )
+    assert verb_tool_name(VerbServer.DO, "pass_review") == "mcp__roboco_do__pass_review"
 
 
 def test_mcp_config_names_only_the_trusted_bridge() -> None:
@@ -135,6 +177,10 @@ def test_mcp_config_names_only_the_trusted_bridge() -> None:
         python=Path("/usr/local/bin/python"),
         socket_path=Path("/run/roboco/gateway/gateway.sock"),
         capability="synthetic-capability",
+        manifest=_manifest((WorkerOperation.READ_FILE,)),
+        credentials=None,
+        orchestrator_url="",
+        manifest_file=Path("/run/roboco/runs/x/tool-manifest.json"),
     )
     assert list(config["mcpServers"]) == [WORKER_MCP_SERVER_NAME]
     server = config["mcpServers"][WORKER_MCP_SERVER_NAME]
@@ -145,6 +191,70 @@ def test_mcp_config_names_only_the_trusted_bridge() -> None:
         GATEWAY_SOCKET_ENV,
         RUN_CAPABILITY_ENV,
     }
+
+
+def test_mcp_config_launches_only_fixed_verb_server_modules() -> None:
+    credentials = _credentials()
+    config = build_mcp_config(
+        python=Path("/usr/local/bin/python"),
+        socket_path=Path("/run/roboco/gateway/gateway.sock"),
+        capability=None,
+        manifest=_manifest(flow=("i_am_done",), do=("commit",)),
+        credentials=credentials,
+        orchestrator_url="http://orchestrator:8000",
+        manifest_file=Path("/run/roboco/runs/x/tool-manifest.json"),
+    )
+    servers = config["mcpServers"]
+    assert set(servers) == {"roboco_flow", "roboco_do"}
+    assert servers["roboco_flow"]["args"] == ["-P", "-m", "roboco.mcp.flow_server"]
+    assert servers["roboco_do"]["args"] == ["-P", "-m", "roboco.mcp.do_server"]
+    env = servers["roboco_flow"]["env"]
+    assert env["ROBOCO_AGENT_TOKEN"] == credentials.token
+    assert env["ROBOCO_ORCHESTRATOR_URL"] == "http://orchestrator:8000"
+    assert env["ROBOCO_AGENT_ROLE"] == "backend_dev"
+
+
+def test_verb_manifest_file_lists_each_servers_verbs() -> None:
+    manifest = _manifest(flow=("i_am_done",), do=("commit", "read_task"))
+    assert build_tool_manifest_file(manifest) == {
+        "flow_tools": ["i_am_done"],
+        "do_tools": ["commit", "read_task"],
+    }
+    assert build_tool_manifest_file(None) == {"flow_tools": [], "do_tools": []}
+
+
+def test_credentials_never_appear_in_repr_or_logs() -> None:
+    credentials = _credentials()
+    assert credentials.token not in repr(credentials)
+
+
+def test_verb_grants_need_credentials_and_an_allowed_purpose() -> None:
+    manifest = _manifest(flow=("i_am_done",))
+    with pytest.raises(ValidationError):
+        RunRequest(spec=_spec(), manifest=manifest)
+    with pytest.raises(ValidationError):
+        RunRequest(
+            spec=_spec(purpose="background", workspace_handle=None),
+            manifest=manifest,
+            verb_credentials=_credentials(),
+        )
+    RunRequest(spec=_spec(), manifest=manifest, verb_credentials=_credentials())
+
+
+@pytest.mark.parametrize("verb", ["Bad-Name", "", "a" * 80, "x/../y"])
+def test_verb_names_are_validated(verb: str) -> None:
+    with pytest.raises(ValidationError):
+        VerbGrant(server=VerbServer.FLOW, verbs=(verb,))
+
+
+def test_a_server_cannot_be_granted_twice() -> None:
+    with pytest.raises(ValidationError):
+        ToolManifest(
+            verb_grants=(
+                VerbGrant(server=VerbServer.FLOW, verbs=("a",)),
+                VerbGrant(server=VerbServer.FLOW, verbs=("b",)),
+            )
+        )
 
 
 def test_cli_environment_is_an_allowlist_with_a_bounded_retry_count() -> None:

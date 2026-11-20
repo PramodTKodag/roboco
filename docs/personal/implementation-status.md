@@ -67,7 +67,7 @@ Result is green on the *insecure* upstream behavior, so these tests encode the m
 
 ## Owner decisions that change the plan
 
-- **2026-11-20, provider scope (supersedes "Claude only").** Keep the CLI-based providers (Claude Code, Codex, Gemini, Grok, Kimi) plus Nebius. Remove the rest in Task 7. Hummin ships a CLI wrapper and OpenRouter is API-key based: the owner has not yet ruled on Hummin, so it is treated as removed unless confirmed.
+- **2026-11-20, provider scope (supersedes "Claude only").** Keep the CLI-based providers (Claude Code, Codex, Gemini, Grok, Kimi) plus Nebius. Remove the rest in Task 7. Hummin ships a CLI wrapper and OpenRouter is API-key based: the owner ruled on 2026-11-20 that Hummin is removed with OpenRouter.
 - **Nebius is an explicit, temporary exception to "no API keys".** The owner holds a Nebius API key on a free-token allowance and will disable the provider when the allowance ends. Required controls: the key is readable only by the trusted model service (never by workers, project code or model tools), the egress allowlist names only the Nebius host, no fallback to or from other providers, and a provider switch that is off by default. Kimi is kept in the code but disabled (off by default, not routable) until the owner re-enables it. Each added CLI provider needs its own contract proof (auth classification, retry bound, endpoint inventory) before it is enabled; none is enabled until then.
 
 ## Known environment limitations (not caused by this work)

@@ -44,6 +44,7 @@ from roboco.seeds.initial_data import AGENT_UUIDS, CEO_AGENT_ID
 # token verification refuses every token (fail-closed). Generate with:
 #   python -c 'import secrets; print(secrets.token_hex(32))'
 _AUTH_SECRET_ENV: Final[str] = "ROBOCO_AGENT_AUTH_SECRET"
+_RUN_CLAIM: Final[str] = "run"
 
 
 def _auth_secret() -> bytes | None:
@@ -121,6 +122,10 @@ def _verify_expiring_token(
         payload = json.loads(_b64url_decode(pb))
     except (ValueError, KeyError):
         return False
+    # A run-scoped token is honored only by ``verify_run_token`` behind the run
+    # scope gate; it never authenticates as the agent's ordinary credential.
+    if _RUN_CLAIM in payload:
+        return False
     exp = payload.get("exp")
     if not isinstance(exp, int | float):
         return False
@@ -162,6 +167,84 @@ def verify_agent_token(
         secret, _signing_payload(agent_id, role, team), hashlib.sha256
     ).hexdigest()
     return hmac.compare_digest(expected, token)
+
+
+@dataclass(frozen=True)
+class RunTokenClaims:
+    """Identity a run-scoped token is pinned to."""
+
+    agent_id: str
+    role: str
+    team: str
+    run_id: str
+    expires_at: float
+
+
+def issue_run_token(
+    agent_id: str,
+    role: str,
+    team: str,
+    run_id: str,
+    *,
+    ttl_seconds: float,
+    now: float | None = None,
+) -> str:
+    """Mint a short-lived token pinned to one agent and one model run.
+
+    It is held only by the trusted model service's verb servers, never by the
+    model, and is accepted only through the run scope gate (never as the agent's
+    ordinary token). Returns ``UNSIGNED`` when the secret is unset.
+    """
+    secret = _auth_secret()
+    if not secret:
+        return "UNSIGNED"
+    ts = now if now is not None else time.time()
+    payload = json.dumps(
+        {
+            "id": (agent_id or "").strip().lower(),
+            "role": (role or "").strip().lower(),
+            "team": (team or "").strip().lower(),
+            _RUN_CLAIM: run_id,
+            "iat": ts,
+            "exp": ts + ttl_seconds,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    pb = _b64url_encode(payload)
+    sig = hmac.new(secret, pb.encode("ascii"), hashlib.sha256).hexdigest()
+    return f"{pb}.{sig}"
+
+
+def verify_run_token(token: str, *, now: float | None = None) -> RunTokenClaims | None:
+    """The claims of a validly signed, unexpired run token; ``None`` otherwise."""
+    secret = _auth_secret()
+    if not secret or not token or "." not in token:
+        return None
+    pb, _, sig = token.rpartition(".")
+    expected_sig = hmac.new(secret, pb.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected_sig, sig):
+        return None
+    try:
+        payload = json.loads(_b64url_decode(pb))
+    except ValueError:
+        return None
+    expires_at = payload.get("exp")
+    fields = (payload.get("id"), payload.get("role"), payload.get("team"))
+    run_id = payload.get(_RUN_CLAIM)
+    if not isinstance(expires_at, int | float) or not isinstance(run_id, str):
+        return None
+    if not all(isinstance(field, str) for field in fields):
+        return None
+    if expires_at <= (now if now is not None else time.time()):
+        return None
+    agent_id, role, team = fields
+    return RunTokenClaims(
+        agent_id=agent_id,
+        role=role,
+        team=team,
+        run_id=run_id,
+        expires_at=float(expires_at),
+    )
 
 
 def issue_panel_token() -> str:
