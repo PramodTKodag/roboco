@@ -8,6 +8,7 @@ are told apart by status and by the proxy's own decision log.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -120,7 +121,13 @@ class ProxyStack:
         self.digest = (DEPLOY / "egress-policy.sha256").read_text().strip()
         docker("network", "create", "--internal", "--label", LABEL, self.network)
 
-    def start_proxy(self, *, digest: str | None = None, detach: bool = True) -> Any:
+    def start_proxy(
+        self,
+        *,
+        digest: str | None = None,
+        detach: bool = True,
+        profile: str = "normal",
+    ) -> Any:
         args = [
             "run",
             "--name", self.proxy,
@@ -136,7 +143,7 @@ class ProxyStack:
             "-v", f"{DEPLOY / 'proxy.yaml'}:/confdir/config.yaml:ro",
             "-e", "ROBOCO_EGRESS_POLICY_PATH=/opt/egress/egress-policy.json",
             "-e", f"ROBOCO_EGRESS_POLICY_SHA256={digest or self.digest}",
-            "-e", "ROBOCO_EGRESS_PROFILE=normal",
+            "-e", f"ROBOCO_EGRESS_PROFILE={profile}",
             "-e", "PYTHONPATH=/opt/egress",
             "-e", "PYTHONUNBUFFERED=1",
             "--entrypoint", "mitmdump",
@@ -282,3 +289,44 @@ def test_the_proxy_refuses_to_start_with_an_empty_policy(stack: ProxyStack) -> N
     stack.start_proxy(digest="0" * 64, detach=False)
     state = docker("inspect", "--format", "{{.State.ExitCode}}", stack.proxy)
     assert int(state.stdout.strip()) == EXIT_POLICY_INVALID
+
+
+def _approve_in_maintenance(stack: ProxyStack, host: str) -> str:
+    """Write a copy of the policy whose maintenance profile allows one host."""
+    policy = json.loads((stack.assets / "egress-policy.json").read_text())
+    endpoint = dict(policy["profiles"]["normal"][0], id="login_probe", host=host)
+    policy["profiles"]["maintenance"] = [endpoint]
+    text = json.dumps(policy)
+    (stack.assets / "egress-policy.json").write_text(text)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def test_maintenance_logs_the_refused_target_without_query_or_content(
+    stack: ProxyStack,
+) -> None:
+    digest = _approve_in_maintenance(stack, "api.anthropic.com")
+    started = stack.start_proxy(digest=digest, profile="maintenance")
+    assert started.returncode == 0, started.stderr
+    stack.wait_until_ready()
+    stack.run_client()
+    logs = stack.proxy_logs()
+    assert "target=evil.example:443" in logs
+    assert "target=api.anthropic.com:443/api/event_logging/v2/batch" in logs
+    for forbidden in (CANARY, "beta", "?"):
+        assert forbidden not in "\n".join(
+            line for line in logs.splitlines() if "target=" in line
+        ), forbidden
+
+
+def test_an_empty_maintenance_profile_denies_everything_and_names_the_host(
+    stack: ProxyStack,
+) -> None:
+    started = stack.start_proxy(profile="maintenance")
+    assert started.returncode == 0, started.stderr
+    stack.wait_until_ready()
+    outcomes = stack.run_client()
+    assert outcomes["approved_shape"][0] == "error"
+    logs = stack.proxy_logs()
+    assert "egress deny connect" in logs
+    assert "target=api.anthropic.com:443" in logs
+    assert "egress allow" not in logs

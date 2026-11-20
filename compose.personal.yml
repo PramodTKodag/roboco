@@ -73,6 +73,8 @@ x-controller-env: &controller-env
   # The model runtime's verb servers call the dispatcher, which holds the
   # in-memory run scope; service names are the only hosts the API answers to.
   ROBOCO_API_URL: http://dispatcher:8000
+  # The only browser origins allowed to call the API with the session cookie.
+  ROBOCO_CORS_ORIGINS: '["http://localhost:${ROBOCO_PERSONAL_PORT:-3300}","http://127.0.0.1:${ROBOCO_PERSONAL_PORT:-3300}"]'
   # 127.0.0.1:8000 is the container's own loopback (healthcheck, startup probe):
   # unreachable from any other container or from the host.
   ROBOCO_ALLOWED_HOSTS: '["localhost:${ROBOCO_PERSONAL_PORT:-3300}","127.0.0.1:${ROBOCO_PERSONAL_PORT:-3300}","orchestrator:8000","dispatcher:8000","127.0.0.1:8000"]'

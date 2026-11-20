@@ -6,7 +6,7 @@ state. Nothing here reads the owner's Claude configuration or Keychain, deletes 
 volume, or logs an account out. The subscription login lives only in the
 ``claude_credentials`` volume, written by the owner's own terminal login.
 
-Commands: stage, up, status, login, check, export, stop.
+Commands: stage, up, status, login, check, import, export, stop.
 """
 
 from __future__ import annotations
@@ -18,11 +18,14 @@ import http.cookiejar
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess  # nosec B404 - fixed argv lists only, never a shell
 import sys
 import urllib.parse
 import urllib.request
+from datetime import UTC, datetime
+from uuid import UUID
 from pathlib import Path
 
 import probe_cli_contract as cli_contract
@@ -45,6 +48,9 @@ SERVICE_CLI = "/opt/claude/claude"
 DEFAULT_PORT = "3300"
 OWNER_EMAIL = "owner@localhost.localdomain"
 TOKEN_NAMES = ("claude_service_token", "launcher_admin_token", "launcher_executor_token")
+IMPORT_SCRIPT = REPO_ROOT / "scripts" / "personal" / "import_workspace.py"
+IMPORT_MOUNT = "/import/source"
+HANDLE_LINE = re.compile(r"^workspace handle: ([0-9a-f-]{36})$", re.MULTILINE)
 EGRESS_ROUTE = parse_egress_route(
     "http://egress-proxy:8080", "/etc/roboco/egress/mitmproxy-ca-cert.pem"
 )
@@ -258,21 +264,52 @@ def status() -> None:
     print(f"subscription: {subscription_state()}")
 
 
-def maintenance_endpoints() -> list[object]:
-    profiles = json.loads(POLICY_FILE.read_text(encoding="utf-8"))["profiles"]
-    return list(profiles.get("maintenance", []))
+DENIED_TARGET = re.compile(r"egress deny \S+ .*? target=(\S+)")
+
+
+def denied_targets(proxy_log: str) -> list[str]:
+    """Distinct refused destinations, in first-seen order, from maintenance logs."""
+    seen: dict[str, None] = {}
+    for line in proxy_log.splitlines():
+        match = DENIED_TARGET.search(line)
+        if match:
+            seen.setdefault(match.group(1))
+    return list(seen)
+
+
+def _report_denied_targets(targets: list[str]) -> None:
+    if not targets:
+        print("no refused destinations were recorded during the login")
+        return
+    print("destinations the login tried and the proxy refused:")
+    for target in targets:
+        print(f"  {target}")
+    print(
+        "review each one; approve only what the sign-in needs by adding an exact "
+        "entry to the maintenance profile in deploy/personal/egress-policy.json "
+        "and updating deploy/personal/egress-policy.sha256, then run "
+        "`make personal-login` again (see docs/personal/owner-setup.md)"
+    )
+
+
+def _proxy_log_since(started_at: str) -> str:
+    return _compose(
+        "logs", "--no-color", "--since", started_at, "egress-proxy", capture=True
+    ).stdout
 
 
 def login() -> None:
-    """Owner-terminal login through the maintenance egress profile."""
+    """Owner-terminal login through the maintenance egress profile.
+
+    The maintenance profile is the owner's reviewed allowlist (empty until the
+    owner approves the sign-in endpoints). Model runs are paused for the window
+    and the normal profile is always restored.
+    """
     preflight()
-    if not maintenance_endpoints():
-        raise StackRefused(
-            "no login endpoints are approved in the maintenance egress profile; "
-            "see docs/personal/setup.md before logging in"
-        )
     _require_ok(_compose("stop", "dispatcher"), "pausing model runs")
     env = {**os.environ, "ROBOCO_EGRESS_PROFILE": "maintenance"}
+    started_at = datetime.now(UTC).isoformat()
+    targets: list[str] = []
     try:
         _require_ok(
             subprocess.run(  # noqa: S603  # nosec B603
@@ -285,9 +322,11 @@ def login() -> None:
             "run", "--rm", "--no-deps", "--entrypoint", SERVICE_CLI,
             *_claude_env_flags(), "claude-service", "auth", "login",
         )  # fmt: skip
+        targets = denied_targets(_proxy_log_since(started_at))
     finally:
         _compose("up", "--detach", "--wait", "--force-recreate", "egress-proxy")
         _compose("up", "--detach", "--wait", "dispatcher")
+    _report_denied_targets(targets)
     print(f"subscription: {subscription_state()}")
 
 
@@ -310,9 +349,72 @@ def _owner_session() -> urllib.request.OpenerDirector:
         http.cookiejar.DefaultCookiePolicy(secure_protocols=("https", "http"))
     )
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    # The local access guard checks Origin on state-changing calls, as it does
+    # for the owner's browser.
+    opener.addheaders = [("Origin", owner_url())]
     form = urllib.parse.urlencode({"username": OWNER_EMAIL, "password": password}).encode()
     opener.open(urllib.request.Request(f"{owner_url()}/api/auth/login", data=form), timeout=15)  # noqa: S310  # nosec B310
     return opener
+
+
+def validate_import_source(source: Path) -> Path:
+    """An existing directory that is not the home directory or any parent of it."""
+    resolved = source.expanduser().resolve()
+    if not resolved.is_dir():
+        raise StackRefused("the import source is not a directory")
+    home = Path.home().resolve()
+    if resolved == home or resolved in home.parents:
+        raise StackRefused(
+            "refusing to import a home directory or one of its parents; "
+            "choose the project directory itself"
+        )
+    return resolved
+
+
+def _link_workspace(project_id: UUID, handle: str) -> None:
+    opener = _owner_session()
+    request = urllib.request.Request(  # noqa: S310
+        f"{owner_url()}/api/projects/{project_id}/offline-workspace",
+        data=json.dumps({"workspace_handle": handle}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="PUT",
+    )
+    opener.open(request, timeout=30)  # noqa: S310  # nosec B310
+
+
+def import_project(
+    project_id: UUID, source: Path, options: list[str], *, dry_run: bool
+) -> None:
+    """Snapshot, admit and link a project, entirely on the internal network.
+
+    The source is mounted read-only into a one-off controller container; only the
+    launcher (never a model, never the network) ever sees the archive.
+    """
+    preflight()
+    mounted = validate_import_source(source)
+    arguments = [
+        "--source", IMPORT_MOUNT, "--project-id", str(project_id),
+        "--host", "launcher", "--port", "8765", *options,
+    ]  # fmt: skip
+    if dry_run:
+        arguments.append("--dry-run")
+    result = _compose(
+        "run", "--rm", "--no-deps", "--no-TTY",
+        "--volume", f"{mounted}:{IMPORT_MOUNT}:ro",
+        "--volume", f"{IMPORT_SCRIPT}:/opt/import_workspace.py:ro",
+        "--entrypoint", "python", "orchestrator", "/opt/import_workspace.py", *arguments,
+        capture=True,
+    )  # fmt: skip
+    print(result.stdout, end="")
+    if result.returncode != 0:
+        raise StackRefused("the import was refused; review the findings above")
+    if dry_run:
+        return
+    match = HANDLE_LINE.search(result.stdout)
+    if match is None:
+        raise StackRefused("the import reported no workspace handle")
+    _link_workspace(project_id, match.group(1))
+    print(f"linked project {project_id} to workspace {match.group(1)}")
 
 
 def export_reviewed_patches(task_id: str, out_dir: Path) -> list[Path]:
@@ -342,6 +444,12 @@ def main(argv: list[str]) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     for name in ("stage", "up", "status", "login", "check", "stop"):
         commands.add_parser(name)
+    import_parser = commands.add_parser("import")
+    import_parser.add_argument("project_id", type=UUID)
+    import_parser.add_argument("source", type=Path)
+    import_parser.add_argument("--exclude", action="append", default=[], metavar="GLOB")
+    import_parser.add_argument("--allow", action="append", default=[], metavar="PATH:RULE")
+    import_parser.add_argument("--dry-run", action="store_true")
     export_parser = commands.add_parser("export")
     export_parser.add_argument("task_id")
     export_parser.add_argument("out_dir", type=Path)
@@ -349,6 +457,10 @@ def main(argv: list[str]) -> int:
     try:
         if args.command == "export":
             export(args.task_id, args.out_dir)
+        elif args.command == "import":
+            options = [f"--exclude={glob}" for glob in args.exclude]
+            options += [f"--allow={finding}" for finding in args.allow]
+            import_project(args.project_id, args.source, options, dry_run=args.dry_run)
         else:
             {
                 "stage": stage, "up": up, "status": status,

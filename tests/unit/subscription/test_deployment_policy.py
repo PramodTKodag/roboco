@@ -293,3 +293,15 @@ def test_build_context_allowlist_matches_the_copy_sources(dockerfile: str) -> No
         assert covered, (dockerfile, needed)
     for rule in allowed:
         assert (_REPO_ROOT / rule).exists(), (dockerfile, rule)
+
+
+def test_hosts_origins_and_edge_port_share_one_setting(
+    compose: dict[str, Any], services: dict[str, dict[str, Any]]
+) -> None:
+    port = "${ROBOCO_PERSONAL_PORT:-3300}"
+    environment = compose["x-controller-env"]
+    for name in ("ROBOCO_ALLOWED_HOSTS", "ROBOCO_CORS_ORIGINS"):
+        assert f"localhost:{port}" in environment[name], name
+        assert f"127.0.0.1:{port}" in environment[name], name
+    assert services["nginx"]["ports"] == [f"127.0.0.1:{port}:80"]
+    assert _environment(services["nginx"])["ROBOCO_PERSONAL_PORT"] == port

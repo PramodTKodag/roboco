@@ -41,6 +41,8 @@ POLICY_SHA256_ENV = "ROBOCO_EGRESS_POLICY_SHA256"
 PROFILE_ENV = "ROBOCO_EGRESS_PROFILE"
 EXIT_POLICY_INVALID = 78
 _DENY_STATUS = 403
+MAINTENANCE_PROFILE = "maintenance"
+_MAX_LOGGED_TARGET = 200
 _UPGRADE_HEADERS = ("upgrade", "http2-settings")
 
 
@@ -89,21 +91,36 @@ class EgressGate:
             self._policy.sha256 if self._policy else "",
         )
 
-    def _log(self, decision: Decision, stage: str, method: str = "") -> None:
+    def _log(
+        self, decision: Decision, stage: str, method: str = "", target: str = ""
+    ) -> None:
         logger.info(
-            "egress %s %s %s endpoint=%s reason=%s",
+            "egress %s %s %s endpoint=%s reason=%s%s",
             decision.verdict,
             stage,
             method,
             decision.endpoint_id or "-",
             decision.reason_code,
+            self._discovery_suffix(decision, target),
         )
+
+    def _discovery_suffix(self, decision: Decision, target: str) -> str:
+        """The refused destination, only while the owner reviews a login.
+
+        The normal profile never logs a destination. The maintenance profile
+        names the host, port and path of a refused request (never the query,
+        headers or body) so the owner can approve each login endpoint by hand.
+        """
+        if self._profile != MAINTENANCE_PROFILE or decision.allowed or not target:
+            return ""
+        printable = "".join(c for c in target if c.isprintable() and c != " ")
+        return f" target={printable[:_MAX_LOGGED_TARGET]}"
 
     def http_connect(self, flow: http.HTTPFlow) -> None:
         assert self._policy is not None
         host, port = flow.request.host, flow.request.port
         decision = decide_connect(self._policy, self._profile, host, port)
-        self._log(decision, "connect")
+        self._log(decision, "connect", target=f"{host}:{port}")
         if not decision.allowed:
             flow.response = _reply(_DENY_STATUS, decision.reason_code)
             return
@@ -139,7 +156,13 @@ class EgressGate:
             content_type=flow.request.headers.get("content-type"),
         )
         decision = decide_request(self._policy, self._profile, egress)
-        self._log(decision, "request", flow.request.method)
+        path = flow.request.path.split("?", 1)[0]
+        self._log(
+            decision,
+            "request",
+            flow.request.method,
+            f"{flow.request.host}:{flow.request.port}{path}",
+        )
         if not decision.allowed:
             flow.response = _reply(_DENY_STATUS, decision.reason_code)
 

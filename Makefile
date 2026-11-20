@@ -118,6 +118,13 @@ personal-export:
 	@test -n "$(TASK)" -a -n "$(OUT)" || { echo "usage: make personal-export TASK=<task id> OUT=<directory>"; exit 2; }
 	@$(PERSONAL_STACK) export "$(TASK)" "$(OUT)"
 
+# Import a project into an offline workspace and link it:
+#   make personal-import PROJECT=<project uuid> SOURCE=<dir> [DRY_RUN=1]
+.PHONY: personal-import
+personal-import:
+	@test -n "$(PROJECT)" -a -n "$(SOURCE)" || { echo "usage: make personal-import PROJECT=<project uuid> SOURCE=<directory> [DRY_RUN=1]"; exit 2; }
+	@$(PERSONAL_STACK) import "$(PROJECT)" "$(SOURCE)" $(if $(DRY_RUN),--dry-run,)
+
 .PHONY: personal-stop
 personal-stop:
 	@$(PERSONAL_STACK) stop

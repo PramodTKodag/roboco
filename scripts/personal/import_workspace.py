@@ -95,7 +95,7 @@ async def _import(args: argparse.Namespace, snapshot: SnapshotResult) -> int:
         return EXIT_REFUSED
     print(f"workspace handle: {handle}")
     print(
-        f"link it: PUT /api/v1/projects/{args.project_id}/offline-workspace "
+        f"link it: PUT /api/projects/{args.project_id}/offline-workspace "
         f'with {{"workspace_handle": "{handle}"}} as the CEO'
     )
     return EXIT_OK
