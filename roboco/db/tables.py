@@ -598,6 +598,12 @@ class ProjectTable(Base):
     # this calendar month's summed agent-spawn spend across the project's tasks.
     monthly_budget_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Handle of the project's imported offline worker workspace (migration 110).
+    # Null until the owner imports one; model runs are bound to exactly this.
+    offline_workspace_handle: Mapped[UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+
     # Sandboxed per-agent-spawn DB/Redis opt-in. A project participates only
     # when sandbox_services is set (e.g. ["postgres", "redis"]); values are
     # validated by the Project pydantic model before reaching here.

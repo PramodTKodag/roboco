@@ -26,7 +26,6 @@ from roboco.foundation.identity import (
 )
 from roboco.models.base import ModelProvider
 from roboco.models.runtime import (
-    ROLE_EFFORT_MAP,
     ROLE_MODEL_MAP,
     AgentInstance,
     OrchestratorAgentConfig,
@@ -38,7 +37,6 @@ from roboco.runtime.orchestrator import (
     AGENT_BASE_IMAGE,
     AGENT_IMAGES,
     AGENT_NETWORK,
-    CLAUDE_AUTH_HOST_PATH,
     DATA_HOST_PATH,
     GATEWAY_ENABLED_ROLES,
     PROJECT_HOST_PATH,
@@ -61,12 +59,19 @@ from roboco.runtime.orchestrator import (
     is_unattributed_delivery_spawn,
     logger,
 )
+from roboco.runtime.engines.subscription_dispatch import (
+    SubscriptionNotConfigured,
+    build_run_launch,
+    build_run_supervisor,
+    resolve_project_binding,
+)
 from roboco.seeds.initial_data import AGENT_UUIDS
 
 if TYPE_CHECKING:
     from uuid import UUID
 
     from roboco.llm.providers import AgentProvider, ProviderRegistry
+    from roboco.runtime.engines.subscription_runs import RunSupervisor
 
     # Also bound into this module's real (non-TYPE_CHECKING) globals at
     # runtime by orchestrator.py, right after the class is defined -- see
@@ -826,7 +831,6 @@ class SpawnLaunchEngine(_Base):
             return {
                 "docs": f"{PROJECT_HOST_PATH}/docs",
                 "workspaces": f"{DATA_HOST_PATH}/workspaces",
-                "claude": CLAUDE_AUTH_HOST_PATH,
                 "mcp_config": f"{DATA_HOST_PATH}/mcp-configs/{mcp_name}",
                 # Per-agent grok usage dir (GROK only); the orchestrator reads the
                 # captured tokens back at finalize via the shared data volume
@@ -864,7 +868,6 @@ class SpawnLaunchEngine(_Base):
         return {
             "docs": str((self.project_root / "docs").absolute()),
             "workspaces": str(Path(settings.workspaces_root)),
-            "claude": CLAUDE_AUTH_HOST_PATH,
             "mcp_config": str(config.mcp_config_path),
             "grok_usage": str(
                 Path(tempfile.gettempdir()) / "roboco-grok-usage" / config.agent_id
@@ -918,11 +921,7 @@ class SpawnLaunchEngine(_Base):
             # 20.10+ (May 2021) supports host-gateway on Linux.
             "--add-host",
             "host.docker.internal:host-gateway",
-            # Mount Claude auth directory (for API keys, etc.)
-            "-v",
-            f"{hosts['claude']}:/home/agent/.claude",
         ]
-        AgentOrchestrator._append_claude_json_mount(cmd, hosts)
         AgentOrchestrator._append_optional_host_mounts(cmd, hosts)
         role = get_agent_role(config.agent_id) or "developer"
         cmd.extend(AgentOrchestrator._core_volume_and_env_args(config, hosts, role))
@@ -932,16 +931,6 @@ class SpawnLaunchEngine(_Base):
         AgentOrchestrator._append_manifest_args(cmd, config, subagent_model)
         AgentOrchestrator._append_workspace_cwd(cmd, config)
         return cmd
-
-    @staticmethod
-    def _append_claude_json_mount(cmd: list[str], hosts: dict[str, str | None]) -> None:
-        """Mount host's ~/.claude.json sibling FILE if present."""
-        claude_dir = hosts["claude"]
-        if not claude_dir:
-            return
-        claude_json_host = f"{claude_dir.rstrip('/')}.json"
-        if Path(claude_json_host).exists():
-            cmd.extend(["-v", f"{claude_json_host}:/home/agent/.claude.json"])
 
     @staticmethod
     def _append_optional_host_mounts(
@@ -1134,120 +1123,6 @@ class SpawnLaunchEngine(_Base):
         if config.git_context.branch_name:
             cmd.extend(["-e", f"ROBOCO_BRANCH={config.git_context.branch_name}"])
 
-    @staticmethod
-    def _append_gate_env(cmd: list[str]) -> None:
-        """Inject the test-DB env so an agent's gate runs the real, DB-backed
-        suite instead of a hollow unit-only subset.
-
-        Without a reachable Postgres the conftest skips every integration test,
-        so coverage collapses far below the gate threshold and a role 'gates'
-        against a partial run (the failure that made a PM read 71% on a suite
-        that is ~96% with a DB). The values come from the orchestrator's own DB
-        settings; agents share the Docker network, so the host resolves. The app
-        runtime reads ROBOCO_DATABASE_*, never ROBOCO_TEST_DB_*, so this only
-        feeds the test harness and never changes live behaviour. Gated on the
-        same faithful-gate flag as interpreter matching — both exist to make an
-        agent's self-gate trustworthy.
-
-        Under DB network isolation (postgres/redis on the data-only compose
-        network) agents cannot reach these hosts at all, so the injection is
-        suppressed entirely: creds that dead-end in a connect timeout are
-        worse than none (the conftest reachability check skips cleanly on a
-        fast refusal). DB-needing projects opt into `sandbox_services` instead.
-        """
-        if settings.db_network_isolated:
-            return
-        if not settings.toolchain_match_enabled:
-            return
-        cmd.extend(
-            [
-                "-e",
-                f"ROBOCO_TEST_DB_HOST={settings.database_host}",
-                "-e",
-                f"ROBOCO_TEST_DB_PORT={settings.database_port}",
-                "-e",
-                f"ROBOCO_TEST_DB_USER={settings.database_user}",
-                "-e",
-                f"ROBOCO_TEST_DB_PASSWORD={settings.database_password}",
-                "-e",
-                "ROBOCO_TEST_DB_ADMIN_DB=postgres",
-            ]
-        )
-
-    @staticmethod
-    def _append_sandbox_marker_env(cmd: list[str], services: list[str]) -> None:
-        """Cheap availability probe: names the request_sandbox-eligible services.
-
-        Replaces eager sandbox env injection now that provisioning is
-        on-demand (the `request_sandbox` do-verb) — never prod creds, purely
-        informational so the agent knows the verb will succeed. Called
-        INSTEAD OF `_append_gate_env` for an opted-in project (never both).
-        """
-        cmd.extend(["-e", f"ROBOCO_SANDBOX_SERVICES_AVAILABLE={','.join(services)}"])
-
-    @classmethod
-    def _append_image_and_claude_args(
-        cls, cmd: list[str], config: AgentConfig, initial_prompt: str | None
-    ) -> None:
-        """Append the image + Claude Code CLI args to the docker run cmd.
-
-        `--tools` explicitly enumerates the built-in tools loaded at session
-        start. Without it, Claude CLI's default behavior leaves Edit/Write
-        in the deferred pool, so an agent that doesn't reliably call
-        ToolSearch (e.g. weaker non-Anthropic models routed via
-        Ollama-cloud) ends up unable to modify any file. The set below is
-        the minimum every agent role needs:
-          - Read/Write/Edit  : file IO inside the workspace
-          - Bash             : shell commands (gated by bash-guard hook)
-          - Grep/Glob        : code navigation
-          - TodoWrite        : per-session planning
-        Permissions still gate *which* paths Edit/Write can touch (see
-        `_get_role_permissions`), so this is purely about loading vs
-        denying.
-
-        `--disable-slash-commands` closes a separate capability channel
-        `--tools` doesn't reach: skills/slash-commands resolve independently
-        of the built-in tool allowlist (Anthropic's own `--bare` flag docs
-        call this out — skills still resolve via `/skill-name` even with
-        everything else disabled). The agent's `~/.claude` is the host's
-        shared Claude Code auth dir, bind-mounted into every container
-        (`_build_mount_args`); if it ever carries personal
-        skills/plugins/marketplace installs, this stops them from silently
-        becoming callable inside the agent's session. No RoboCo role's
-        workflow uses a Claude Code skill (their surface is the MCP gateway
-        + the `--tools` set above), so this has no legitimate flow to break.
-        """
-        claude_args = [
-            get_agent_image(config.agent_id),
-            "--model",
-            cls._resolve_cli_model(config),
-            "--system-prompt-file",
-            "/app/system-prompt.md",
-            "--mcp-config",
-            "/app/mcp-config.json",
-            "--strict-mcp-config",
-            "--tools",
-            "Read,Write,Edit,Bash,Grep,Glob,TodoWrite",
-            "--disable-slash-commands",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-        ]
-        # Per-role reasoning-effort override via Claude Code's `--effort` flag.
-        # Only set for roles in ROLE_EFFORT_MAP; models without effort support
-        # ignore it, so passing it for a mapped role is always safe.
-        _effort_role = get_agent_role(config.agent_id)
-        _effort = ROLE_EFFORT_MAP.get(_effort_role) if _effort_role else None
-        if _effort:
-            claude_args += ["--effort", _effort]
-        # Pin the Claude session id so the agent's transcript is locatable by id
-        # at finalize, regardless of which project/cwd dir Claude Code writes it
-        # to (review/coordinate roles run at /app, not a per-agent workspace).
-        if config.claude_session_id:
-            claude_args += ["--session-id", config.claude_session_id]
-        claude_args += ["-p", initial_prompt or cls._default_spawn_prompt()]
-        cmd.extend(claude_args)
-
     def _ensure_provider_registry(self) -> "ProviderRegistry":
         """Build (once) the registry of dedicated provider backends.
 
@@ -1368,40 +1243,36 @@ class SpawnLaunchEngine(_Base):
             result = await provider.spawn(config, initial_prompt, agent_settings_path)
             return result.instance_id
 
-        container_name = f"roboco-agent-{config.agent_id}"
-        # teardown_sandbox=False: nothing is provisioned before spawn anymore
-        # (sandboxes are on-demand via request_sandbox/ensure_sandbox), so this
-        # is now vestigial for THIS spawn — but it still protects a respawn
-        # racing a sandbox the agent just requested moments ago via the verb.
-        await self._remove_container(
-            container_name, teardown_sandbox=False, stop_reason="pre_spawn_stale_clear"
+        return await self._start_subscription_run(config, initial_prompt)
+
+    def _ensure_run_supervisor(self) -> RunSupervisor:
+        """The model-run supervisor, built once; raises if the service is unset."""
+        if self._run_supervisor is None:
+            self._run_supervisor = build_run_supervisor(settings)
+        return self._run_supervisor
+
+    async def _start_subscription_run(
+        self, config: AgentConfig, initial_prompt: str
+    ) -> str:
+        """Start the agent as one bounded run on the trusted model service.
+
+        Only the Anthropic subscription is routable here. Any other provider
+        without a dedicated backend is refused, never run on another runtime.
+        """
+        if config.provider_type != ModelProvider.ANTHROPIC.value:
+            raise SubscriptionNotConfigured(
+                f"provider {config.provider_type!r} has no runtime and is not routable"
+            )
+        supervisor = self._ensure_run_supervisor()
+        binding = await resolve_project_binding(
+            config.git_context.project_slug if config.git_context else None
         )
-
-        if not config.mcp_config_path:
-            raise RuntimeError("MCP config path not set")
-
-        hosts = self._resolve_host_paths(config, agent_settings_path)
-        cmd = self._build_mount_args(container_name, config, hosts)
-        self._append_agent_auth_env(cmd, config)
-        self._append_git_context_env(cmd, config)
-        if config.sandbox_available_services:
-            self._append_sandbox_marker_env(cmd, config.sandbox_available_services)
-        else:
-            self._append_gate_env(cmd)
-        cmd.extend(await compose_label_args(config.agent_id))
-        self._append_image_and_claude_args(cmd, config, initial_prompt)
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
-            raise RuntimeError(f"Failed to start container: {stderr.decode()}")
-
-        return stdout.decode().strip()
+        launch = await build_run_launch(config, initial_prompt, binding)
+        # A respawn replaces the agent's previous run; its credentials are
+        # revoked before the new run starts.
+        await supervisor.cancel(config.agent_id)
+        supervisor.forget(config.agent_id)
+        return await supervisor.start(launch)
 
     async def _is_video_authoring_spawn(
         self, agent_id: str, agent_role: str, task_id: str | None

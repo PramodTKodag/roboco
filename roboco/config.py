@@ -305,6 +305,26 @@ class Settings(BaseSettings):
         default="/opt/claude/claude",
         description="Absolute path of the pinned official Claude CLI binary.",
     )
+    # The trusted model service and the worker launcher the controller drives.
+    # Tokens are read from files so they never appear in the environment dump.
+    claude_service_host: str = Field(
+        default="",
+        description="Host of the trusted model service; empty disables model runs.",
+    )
+    claude_service_port: int = Field(default=8766, ge=1, le=65535)
+    claude_service_token_file: str = Field(
+        default="",
+        description="File holding the bearer token for the trusted model service.",
+    )
+    launcher_host: str = Field(
+        default="",
+        description="Host of the worker launcher; empty disables worker tools.",
+    )
+    launcher_port: int = Field(default=8765, ge=1, le=65535)
+    launcher_admin_token_file: str = Field(
+        default="",
+        description="File holding the launcher admin token (registers runs).",
+    )
     subscription_status_timeout_seconds: float = Field(
         default=15.0,
         gt=0,

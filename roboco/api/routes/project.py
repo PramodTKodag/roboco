@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from roboco.api.deps import (
     CurrentAgentContext,
     DbSession,
+    require_ceo_role,
     require_cell_access,
     require_pm_or_above,
 )
@@ -25,6 +26,7 @@ from roboco.api.schemas.project import (
     ProjectSummaryResponse,
     ProjectTaskCounts,
     ProjectUpdateRequest,
+    SetOfflineWorkspaceRequest,
     SetWorkspaceRequest,
     SyncStateRequest,
     project_to_summary,
@@ -355,6 +357,32 @@ async def set_workspace(
             detail=f"Project not found: {project_id}",
         )
 
+    return await _build_project_response(db, updated)
+
+
+@router.put("/{project_id}/offline-workspace", response_model=ProjectResponse)
+@guard_deco.rate_limit(requests=30, window=60)
+@guard_deco.max_request_size(size_bytes=1024)
+@guard_deco.content_type_filter(["application/json"])
+async def set_offline_workspace(
+    project_id: str,
+    data: SetOfflineWorkspaceRequest,
+    db: DbSession,
+    agent: CurrentAgentContext,
+) -> ProjectResponse:
+    """Link the project to the offline workspace the owner imported (CEO only)."""
+    require_ceo_role(agent.role, action="link an offline workspace")
+    service = get_project_service(db)
+    project = await _get_project_or_404(service, project_id)
+    updated = await service.set_offline_workspace_handle(
+        cast("UUID", project.id), data.workspace_handle
+    )
+    await db.commit()
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project not found: {project_id}",
+        )
     return await _build_project_response(db, updated)
 
 

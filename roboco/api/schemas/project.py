@@ -251,6 +251,12 @@ class SetWorkspaceRequest(BaseModel):
     workspace_path: str
 
 
+class SetOfflineWorkspaceRequest(BaseModel):
+    """Request to link a project to its imported offline workspace."""
+
+    workspace_handle: UUID
+
+
 class SyncStateRequest(BaseModel):
     """Request to update sync state."""
 

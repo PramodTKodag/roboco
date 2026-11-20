@@ -24,7 +24,6 @@ from roboco.runtime.subscription.contracts import (
     RunState,
     SubscriptionState,
     SubscriptionStatus,
-    ToolManifest,
 )
 from roboco.runtime.subscription.service_protocol import (
     MAX_FRAME_BYTES,
@@ -35,6 +34,8 @@ from roboco.runtime.subscription.service_protocol import (
 
 if TYPE_CHECKING:
     from uuid import UUID
+
+    from roboco.runtime.subscription.contracts import ToolManifest, VerbCredentials
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +66,14 @@ class SubscriptionClient:
         )
 
     async def run(
-        self, spec: RunSpec, manifest: ToolManifest | None = None
+        self,
+        spec: RunSpec,
+        manifest: ToolManifest | None = None,
+        verb_credentials: VerbCredentials | None = None,
     ) -> RunResult:
-        request = RunRequest(spec=spec, manifest=manifest)
+        request = RunRequest(
+            spec=spec, manifest=manifest, verb_credentials=verb_credentials
+        )
         response = await self._call(
             ServiceAction.RUN,
             request.model_dump(mode="json"),

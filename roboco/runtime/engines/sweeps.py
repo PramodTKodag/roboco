@@ -247,31 +247,8 @@ class SweepsEngine(_Base):
                 instance.state = AgentState.STOPPING
                 container_name = f"roboco-agent-{agent_id}"
 
-                if graceful:
-                    # Graceful stop with timeout
-                    proc = await asyncio.create_subprocess_exec(
-                        "docker",
-                        "stop",
-                        "-t",
-                        "10",
-                        container_name,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    await proc.wait()
-                else:
-                    # Force kill
-                    proc = await asyncio.create_subprocess_exec(
-                        "docker",
-                        "kill",
-                        container_name,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.DEVNULL,
-                    )
-                    await proc.wait()
-
-                # Remove container
-                await self._remove_container(container_name)
+                if not await self._end_supervised_run(container_name):
+                    await self._stop_and_remove_container(container_name, graceful)
 
             instance.state = AgentState.OFFLINE
             instance.container_id = None
@@ -286,6 +263,21 @@ class SweepsEngine(_Base):
         # probe-resume loop owns its recovery and the claim must survive.
         if stopped_task_id and not self._is_rate_limit_parked(agent_id):
             await self._release_stopped_agent_claim(agent_id, stopped_task_id)
+
+    async def _stop_and_remove_container(
+        self, container_name: str, graceful: bool
+    ) -> None:
+        """`docker stop` (graceful, 10 s) or `docker kill`, then remove it."""
+        args = ("stop", "-t", "10") if graceful else ("kill",)
+        proc = await asyncio.create_subprocess_exec(
+            "docker",
+            *args,
+            container_name,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await proc.wait()
+        await self._remove_container(container_name)
 
     def _is_rate_limit_parked(self, agent_id: str) -> bool:
         """True if the agent is provider-parked on a rate limit.

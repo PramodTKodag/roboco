@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from roboco.llm.providers import ProviderRegistry
     from roboco.models.runtime import AgentInstance, SpawnGitContext, WaitingRecord
     from roboco.models.sandbox import SandboxInfo
+    from roboco.runtime.engines.subscription_runs import RunSupervisor
     from roboco.runtime.sandbox import SandboxProvisioner
     from roboco.services.llm import AgentRoute
     from roboco.services.uptime import UptimeLedger
@@ -88,6 +89,7 @@ class AgentOrchestratorSelf(Protocol):
     _notification_spawn_count: dict[tuple[str, str], int]
     _pm_respawn_tracker: dict[tuple[str, str], dict[str, Any]]
     _provider_registry: ProviderRegistry | None
+    _run_supervisor: RunSupervisor | None
     _rate_limit_ceo_notified: set[str]
     _respawn_persist_lock: asyncio.Lock
     _resume_confirm_delay: float
@@ -234,9 +236,8 @@ class AgentOrchestratorSelf(Protocol):
     async def _has_recent_delivery_activity(
         self, *args: Any, **kwargs: Any
     ) -> bool: ...
-    @staticmethod
     async def _inspect_container_state(
-        *args: Any, **kwargs: Any
+        self, *args: Any, **kwargs: Any
     ) -> tuple[bool, int | None]: ...
     def _is_agent_active(self, *args: Any, **kwargs: Any) -> bool: ...
     def _is_claim_in_flight(self, *args: Any, **kwargs: Any) -> bool: ...
@@ -291,6 +292,13 @@ class AgentOrchestratorSelf(Protocol):
     async def _refresh_uptime(self, *args: Any, **kwargs: Any) -> UptimeLedger: ...
     async def _release_claim_to_pending(self, *args: Any, **kwargs: Any) -> None: ...
     async def _remove_container(self, *args: Any, **kwargs: Any) -> None: ...
+    async def _end_supervised_run(self, *args: Any, **kwargs: Any) -> bool: ...
+    async def _stop_and_remove_container(
+        self, *args: Any, **kwargs: Any
+    ) -> None: ...
+    def _supervised_run_state(
+        self, *args: Any, **kwargs: Any
+    ) -> tuple[bool, int | None] | None: ...
     @staticmethod
     def _repo_key(*args: Any, **kwargs: Any) -> str: ...
     async def _resolve_agent_route(self, *args: Any, **kwargs: Any) -> AgentRoute: ...

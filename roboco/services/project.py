@@ -482,6 +482,26 @@ class ProjectService(BaseService):
     # WORKSPACE MANAGEMENT
     # =========================================================================
 
+    async def set_offline_workspace_handle(
+        self, project_id: UUID, handle: UUID
+    ) -> ProjectTable | None:
+        """Link the project to its imported offline worker workspace.
+
+        Returns the updated project, or None if the project does not exist.
+        """
+        project = await self.get(project_id)
+        if not project:
+            return None
+        project.offline_workspace_handle = handle
+        await self.session.flush()
+        self.log.info("Offline workspace linked", project_id=str(project_id))
+        return project
+
+    async def get_offline_workspace_handle(self, project_id: UUID) -> UUID | None:
+        """The project's offline workspace handle, or None if none is linked."""
+        project = await self.get(project_id)
+        return project.offline_workspace_handle if project else None
+
     async def set_workspace_path(
         self,
         project_id: UUID,

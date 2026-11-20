@@ -19,6 +19,12 @@ import httpx
 from fastapi import status as http_status
 
 from roboco.config import settings
+from roboco.runtime.engines.subscription_runs import (
+    LOGIN_REQUIRED_EXIT_CODE,
+    RATE_LIMIT_EXIT_CODE,
+    SUBSCRIPTION_LOGIN_RETRY_AFTER_S,
+    SUBSCRIPTION_RATE_LIMIT_RETRY_AFTER_S,
+)
 from roboco.models.runtime import (
     AgentInstance,
     WaitingRecord,
@@ -258,6 +264,24 @@ class SpawnExitEngine(_Base):
             "state_error": error or None,
         }
 
+    def _supervised_run_state(self, container_name: str) -> tuple[bool, int | None] | None:
+        """The run's ``(is_running, exit_code)``, or None if it is not a model run."""
+        supervisor = self._run_supervisor
+        slug = container_name.removeprefix("roboco-agent-")
+        if supervisor is None or not supervisor.owns(slug):
+            return None
+        return supervisor.state(slug)
+
+    async def _end_supervised_run(self, container_name: str) -> bool:
+        """Cancel and forget the agent's model run; False if it has none."""
+        supervisor = self._run_supervisor
+        slug = container_name.removeprefix("roboco-agent-")
+        if supervisor is None or not supervisor.owns(slug):
+            return False
+        await supervisor.cancel(slug)
+        supervisor.forget(slug)
+        return True
+
     async def _remove_container(
         self,
         container_name: str,
@@ -285,6 +309,8 @@ class SpawnExitEngine(_Base):
             self._record_expected_stop(
                 container_name.removeprefix("roboco-agent-"), stop_reason
             )
+        if await self._end_supervised_run(container_name):
+            return
         # Check the container actually exists before trying to dump logs;
         # _remove_container is routinely called pre-spawn to clear stale
         # containers, and on first spawn there's nothing to dump.
@@ -1389,15 +1415,19 @@ class SpawnExitEngine(_Base):
             return None
         return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
-    @staticmethod
     async def _inspect_container_state(
+        self,
         container_name: str,
     ) -> tuple[bool, int | None]:
         """Return (is_running, exit_code) from `docker inspect`.
 
         exit_code is None when the output is missing or unparseable; the
-        caller treats None as a crash for safety.
+        caller treats None as a crash for safety. An agent running as a model
+        run has no container: its state comes from the run supervisor.
         """
+        supervised = self._supervised_run_state(container_name)
+        if supervised is not None:
+            return supervised
         proc = await asyncio.create_subprocess_exec(
             "docker",
             "inspect",
@@ -1511,6 +1541,11 @@ class SpawnExitEngine(_Base):
         ``_park_*`` call), False when none match.
         """
         checks = (
+            (
+                self._is_subscription_rate_limit_exit,
+                self._park_subscription_rate_limited,
+            ),
+            (self._is_subscription_login_exit, self._park_subscription_login_required),
             (self._is_grok_rate_limit_exit, self._park_grok_rate_limited),
             (self._is_grok_auth_exit, self._park_grok_auth_unavailable),
             (self._is_codex_rate_limit_exit, self._park_codex_rate_limited),
@@ -1811,6 +1846,30 @@ class SpawnExitEngine(_Base):
                 agent_id=agent_id,
                 error=str(e),
             )
+
+    @staticmethod
+    def _is_subscription_run(instance: Any) -> bool:
+        from roboco.models.base import ModelProvider
+
+        return (
+            instance.config is not None
+            and instance.config.provider_type == ModelProvider.ANTHROPIC.value
+        )
+
+    @staticmethod
+    def _is_subscription_rate_limit_exit(instance: Any, exit_code: int | None) -> bool:
+        """True for a model run that ended 75: the subscription quota is spent."""
+        return exit_code == RATE_LIMIT_EXIT_CODE and AgentOrchestrator._is_subscription_run(
+            instance
+        )
+
+    @staticmethod
+    def _is_subscription_login_exit(instance: Any, exit_code: int | None) -> bool:
+        """True for a model run that ended 78: the owner login is missing/expired."""
+        return (
+            exit_code == LOGIN_REQUIRED_EXIT_CODE
+            and AgentOrchestrator._is_subscription_run(instance)
+        )
 
     @staticmethod
     def _is_grok_rate_limit_exit(instance: Any, exit_code: int | None) -> bool:
@@ -2325,6 +2384,34 @@ class SpawnExitEngine(_Base):
                 agent_id=agent_id,
                 error=str(exc),
             )
+
+    async def _park_subscription_rate_limited(
+        self, agent_id: str, instance: Any
+    ) -> None:
+        """Park the subscription provider; the run is never retried elsewhere."""
+        from roboco.models.base import ModelProvider
+
+        await self._park_provider_unavailable(
+            agent_id,
+            instance,
+            provider=ModelProvider.ANTHROPIC.value,
+            retry_after=SUBSCRIPTION_RATE_LIMIT_RETRY_AFTER_S,
+            kind="rate_limit",
+        )
+
+    async def _park_subscription_login_required(
+        self, agent_id: str, instance: Any
+    ) -> None:
+        """Park until the owner logs the trusted service in again."""
+        from roboco.models.base import ModelProvider
+
+        await self._park_provider_unavailable(
+            agent_id,
+            instance,
+            provider=ModelProvider.ANTHROPIC.value,
+            retry_after=SUBSCRIPTION_LOGIN_RETRY_AFTER_S,
+            kind="auth_missing",
+        )
 
     async def _park_grok_rate_limited(self, agent_id: str, instance: Any) -> None:
         """Park a grok agent whose run hit an xAI 429 (entrypoint exit 75).

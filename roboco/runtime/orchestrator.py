@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from roboco.llm.providers import ProviderRegistry
+    from roboco.runtime.engines.subscription_runs import RunSupervisor
     from roboco.services.uptime import UptimeLedger
 import httpx
 import structlog
@@ -1483,6 +1484,10 @@ class AgentOrchestrator(
         # on unregistered providers (Anthropic / Ollama Cloud / self-hosted) use
         # the built-in _spawn_container path unchanged. Built lazily.
         self._provider_registry: ProviderRegistry | None = None
+        # Delivery agents on the Anthropic subscription run as bounded model
+        # runs on the trusted service, not containers. Built lazily and fails
+        # closed when the service is not configured.
+        self._run_supervisor: RunSupervisor | None = None
         # Tracks which providers have already received a CEO notification
         # during the current rate-limit episode.  Cleared when the probe
         # succeeds and the rate limit is lifted (tracker.clear() path).
