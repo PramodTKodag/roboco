@@ -53,17 +53,70 @@ _SECRET_PATTERNS: list[_re.Pattern[str]] = [
     # in git URLs if they slip in (e.g. from a stderr line)
     _re.compile(r"(https://[^:@/\s]+:[^@/\s]{8,}@)"),
     _re.compile(r"(https://[A-Za-z0-9_\-.]{20,}@)"),
+    # Subscription OAuth access/refresh tokens and API keys (sk-ant-oat01-,
+    # sk-ant-ort01-, sk-ant-api03-) and the generic sk- key shape.
+    _re.compile(r"(sk-ant-[A-Za-z0-9_\-]{10,})"),
+    _re.compile(r"(\bsk-[A-Za-z0-9_\-]{20,})"),
+    # JWTs (header.payload.signature) and run/agent capability tokens
+    # (<base64url payload>.<hex HMAC>).
+    _re.compile(r"(eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]*)"),
+    _re.compile(r"([A-Za-z0-9_\-]{16,}\.[0-9a-f]{64}\b)"),
+    # The owner session cookie, as a Cookie / Set-Cookie value.
+    _re.compile(r"(roboco_session=[^;\s,]+)"),
+    # Credentials embedded in a database / cache / broker URL.
+    _re.compile(
+        r"((?:postgres(?:ql)?|redis|rediss|mongodb|amqp)(?:\+\w+)?://[^:@/\s]*:[^@/\s]+@)"
+    ),
 ]
+
+# Field names whose string value is a secret whatever its shape: the value is
+# replaced whole, in nested mappings too (e.g. a logged query string).
+_SECRET_KEY_NAMES: frozenset[str] = frozenset(
+    {
+        "token",
+        "password",
+        "secret",
+        "api_key",
+        "apikey",
+        "cookie",
+        "set-cookie",
+        "authorization",
+        "credential",
+        "credentials",
+        "x-agent-token",
+    }
+)
+_SECRET_KEY_SUFFIXES = ("_token", "_password", "_secret", "_api_key", "_cookie")
+
+
+def _is_secret_key(key: object) -> bool:
+    name = str(key).lower()
+    return name in _SECRET_KEY_NAMES or name.endswith(_SECRET_KEY_SUFFIXES)
 
 
 def _redact_secrets(value: Any) -> Any:
-    """Replace known secret shapes with <REDACTED>. Non-str values untouched."""
-    if not isinstance(value, str):
-        return value
-    out = value
-    for pat in _SECRET_PATTERNS:
-        out = pat.sub("<REDACTED>", out)
-    return out
+    """Replace known secret shapes with <REDACTED>, recursing into containers.
+
+    Strings are scrubbed by shape; a mapping value under a secret-named key is
+    replaced whole. Numbers and other scalars are untouched.
+    """
+    if isinstance(value, str):
+        out = value
+        for pat in _SECRET_PATTERNS:
+            out = pat.sub("<REDACTED>", out)
+        return out
+    if isinstance(value, Mapping):
+        return {
+            key: (
+                "<REDACTED>"
+                if _is_secret_key(key) and isinstance(item, str | bytes)
+                else _redact_secrets(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list | tuple):
+        return type(value)(_redact_secrets(item) for item in value)
+    return value
 
 
 def redact_event_dict(
@@ -78,7 +131,7 @@ def redact_event_dict(
     before they're rendered to stdout or the persistent log file.
     """
     for key, value in list(event_dict.items()):
-        event_dict[key] = _redact_secrets(value)
+        event_dict[key] = _redact_secrets({key: value})[key]
     return event_dict
 
 
