@@ -1968,6 +1968,17 @@ class Settings(BaseSettings):
             "when present; this is the fallback used before one is set."
         ),
     )
+    container_runtime_enabled: bool = Field(
+        default=True,
+        description=(
+            "Whether this process manages agent containers through a local "
+            "Docker CLI: building agent images, re-adopting running agents, "
+            "sweeping sandboxes and pruning images. Set false where agents run "
+            "as model runs behind the subscription runtime and the controller "
+            "holds no Docker access; every container-only startup step and "
+            "sweep is then skipped."
+        ),
+    )
     image_prune_enabled: bool = Field(
         default=True,
         description=(

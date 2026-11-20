@@ -1400,7 +1400,7 @@ class SweepsEngine(_Base):
         ``settings.image_prune_enabled`` (default on). Best-effort: any failure
         is logged, never raised into the sweeper.
         """
-        if not settings.image_prune_enabled:
+        if not (settings.image_prune_enabled and settings.container_runtime_enabled):
             return
         now = datetime.now(UTC)
         last = self._last_image_prune

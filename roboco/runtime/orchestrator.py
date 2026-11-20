@@ -1579,7 +1579,10 @@ class AgentOrchestrator(
         await self._mark_running_and_beat()
 
         # Ensure agent image is built
-        await self._ensure_agent_image()
+        if settings.container_runtime_enabled:
+            await self._ensure_agent_image()
+        else:
+            logger.info("Container runtime disabled: skipping agent image build")
 
         # Restore any WaitingRecord rows left by a prior orchestrator run so
         # agents that were WAITING_LONG at shutdown can still be resolved.
@@ -1603,8 +1606,9 @@ class AgentOrchestrator(
         # the spawn gate + reaper see them as live immediately (no double-spawn,
         # no over-reap). Inert when nothing is running. Must run before the
         # dispatcher/reaper loops launch below.
-        await self._heal_stale_agent_tokens()
-        await self._readopt_running_agents()
+        if settings.container_runtime_enabled:
+            await self._heal_stale_agent_tokens()
+            await self._readopt_running_agents()
 
         # Close agent_spawn_sessions rows left open by a prior orchestrator
         # crash so usage/cost rollups (which filter ended_at IS NOT NULL) count
@@ -1614,7 +1618,8 @@ class AgentOrchestrator(
         # Orphan sandbox sweep: a sandbox whose owning agent container didn't
         # survive the restart (or a prior crash mid-teardown) is removed here
         # rather than lingering until its next reaper-tick sweep.
-        await self._sandbox_janitor_sweep()
+        if settings.container_runtime_enabled:
+            await self._sandbox_janitor_sweep()
 
         # Note: Per-agent settings are now generated at spawn time
         # via _generate_agent_settings() - no shared settings needed

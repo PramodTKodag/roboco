@@ -152,3 +152,36 @@ async def test_all_role_matches_dispatcher_role(
     for task_attr, task in zip((t for t, _ in _LOOPS), tasks, strict=True):
         assert task is not None, f"{task_attr} must be scheduled"
     await asyncio.gather(*tasks)
+
+
+_CONTAINER_ONLY_METHODS = (
+    "_ensure_agent_image",
+    "_heal_stale_agent_tokens",
+    "_readopt_running_agents",
+    "_sandbox_janitor_sweep",
+)
+
+
+@pytest.mark.asyncio
+async def test_disabled_container_runtime_skips_only_container_steps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With no container runtime the dispatcher never touches the Docker CLI
+    (image build, re-adoption, token heal, sandbox sweep) but still runs every
+    database reconciliation step and schedules every loop."""
+    monkeypatch.setattr(settings, "role", "dispatcher")
+    monkeypatch.setattr(settings, "container_runtime_enabled", False)
+    with patch(
+        "roboco.services.release_proposal.sweep_orphan_release_locks",
+        AsyncMock(),
+    ):
+        orch = _make_orchestrator()
+        await orch.start()
+
+    for name in _CONTAINER_ONLY_METHODS:
+        getattr(orch, name).assert_not_awaited()
+    for name in set(_RECONCILE_METHODS) - set(_CONTAINER_ONLY_METHODS):
+        getattr(orch, name).assert_awaited_once()
+    tasks = [getattr(orch, task_attr) for task_attr, _ in _LOOPS]
+    assert all(task is not None for task in tasks)
+    await asyncio.gather(*tasks)
