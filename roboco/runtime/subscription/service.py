@@ -258,6 +258,7 @@ class ClaudeService:
                 credentials=request.verb_credentials,
                 orchestrator_url=self._orchestrator_url,
                 manifest_file=manifest_file,
+                session_id=request.session_id,
             ),
         )
         return mcp_config

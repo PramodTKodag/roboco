@@ -28,6 +28,8 @@ _ENTRYPOINTS = (
     "roboco.runtime.subscription.worker_tools_mcp",
     "roboco.mcp.flow_server",
     "roboco.mcp.do_server",
+    "roboco.mcp.intake_server",
+    "roboco.mcp.secretary_server",
 )
 _VERB_SERVER_ENV = {
     "ROBOCO_AGENT_ID": "00000000-0000-0000-0000-000000000001",

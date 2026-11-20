@@ -118,14 +118,36 @@ def test_manifest_with_an_unknown_operation_is_invalid() -> None:
 
 
 @pytest.mark.parametrize("purpose", ["intake", "secretary", "background"])
-def test_tool_free_purposes_never_inherit_delivery_tools(
+def test_non_delivery_purposes_never_inherit_delivery_tools(
     gateway: ToolGateway, purpose: str
 ) -> None:
     request = _request(purpose=purpose, operations=None, with_workspace=False)
     assert gateway.bind(request) is None
     with pytest.raises(ToolDenied) as denied:
+        gateway.bind(_request(purpose=purpose, operations=ALL_OPERATIONS))
+    assert denied.value.reason_code == "tools_not_allowed_for_purpose"
+
+
+@pytest.mark.parametrize("purpose", ["secretary", "background"])
+def test_purposes_without_files_get_no_worker_operations(
+    gateway: ToolGateway, purpose: str
+) -> None:
+    with pytest.raises(ToolDenied) as denied:
         gateway.bind(_request(purpose=purpose, operations=READ_ONLY))
     assert denied.value.reason_code == "tools_not_allowed_for_purpose"
+
+
+def test_intake_may_read_but_never_write(gateway: ToolGateway) -> None:
+    assert gateway.bind(_request(purpose="intake", operations=READ_ONLY)) is not None
+    readable = {
+        WorkerOperation.READ_FILE,
+        WorkerOperation.LIST_FILES,
+        WorkerOperation.SEARCH_TEXT,
+    }
+    for operation in set(ALL_OPERATIONS) - readable:
+        with pytest.raises(ToolDenied) as denied:
+            gateway.bind(_request(purpose="intake", operations=(operation,)))
+        assert denied.value.reason_code == "tools_not_allowed_for_purpose"
 
 
 def test_a_verb_only_delivery_run_needs_no_worker_capability(

@@ -1,18 +1,18 @@
-"""Live intake-session relay — the orchestrator side of the chat bridge.
+"""Live chat relay — the orchestrator side of the chat bridge.
 
-A live intake session is one spawned ``prompter`` container the CEO is chatting
-with. This registry connects three flows for that session, all in-process (the
-orchestrator is single-process and already holds container state in memory):
+A live session is one Intake or Secretary chat the CEO is having. This registry
+connects three flows for that session, all in-process (the orchestrator is
+single-process and already holds session state in memory):
 
-- **agent -> panel:** the container's driver POSTs each normalized
-  ``StreamChunk`` to the relay endpoint, which ``push()``es it onto the
-  session's queue; the SSE endpoint ``stream()``s the queue to the browser.
-- **panel -> agent:** the message endpoint ``deliver()``s the human's text to
-  the container's in-process receiver over HTTP.
-- **lifecycle:** ``open`` on spawn, ``close`` on reap (draft confirmed / idle);
+- **agent -> panel:** each normalized event is ``push()``ed onto the session's
+  queue (by the turn runner, or by the intake tools through the relay endpoint);
+  the SSE endpoint ``stream()``s the queue to the browser.
+- **panel -> agent:** the message endpoint ``deliver()``s the human's text to the
+  registered turn handler, which runs it as one model run.
+- **lifecycle:** ``open`` on start, ``close`` on reap (draft confirmed / idle);
   ``close`` unblocks any open stream with a sentinel.
 
-This module owns no SDK or Claude code — it's pure plumbing, fully unit-tested.
+This module owns no SDK or model code — it's pure plumbing, fully unit-tested.
 """
 
 from __future__ import annotations
@@ -22,16 +22,13 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-import httpx
 import structlog
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
 logger = structlog.get_logger()
 
-# The in-container receiver port (same ROBOCO_SDK_PORT every agent sidecar uses).
-SDK_PORT = 9000
 # Sentinel pushed onto a session's queue to end its SSE stream.
 _CLOSE = object()
 # While the panel holds the SSE stream open, refresh ``last_activity`` on this
@@ -70,9 +67,9 @@ class LiveIntakeSession:
 class PrompterLiveRegistry:
     """Tracks live intake sessions and bridges panel <-> container."""
 
-    def __init__(self, *, http_client: httpx.AsyncClient | None = None) -> None:
+    def __init__(self) -> None:
         self._sessions: dict[str, LiveIntakeSession] = {}
-        self._client = http_client
+        self._turn_handler: Callable[[str, str], bool] | None = None
         self.log = logger.bind(component="prompter_live")
 
     # -- lifecycle ---------------------------------------------------------
@@ -257,45 +254,31 @@ class PrompterLiveRegistry:
 
     # -- panel -> agent ----------------------------------------------------
 
+    def set_turn_handler(self, handler: Callable[[str, str], bool]) -> None:
+        """Register who runs a human message; the orchestrator sets it at startup."""
+        self._turn_handler = handler
+
     async def deliver(self, session_id: str, text: str) -> bool:
-        """Deliver the human's message to the container's receiver. False if gone."""
+        """Hand the human's message to the turn handler. False if it cannot run.
+
+        With no handler registered nothing can answer, so delivery fails closed
+        rather than reaching any other runtime.
+        """
         session = self._sessions.get(session_id)
         if session is None or session.closed:
-            # Silent: the opening-message retry loop polls through the
-            # container's boot, and the exhaustion path warns once upstream
-            # (_deliver_when_ready) — a per-attempt warning here is spam.
+            return False
+        if self._turn_handler is None:
+            self.log.error("Live turn refused: no turn handler", session_id=session_id)
             return False
         session.last_activity = time.monotonic()  # human turn = activity
-        url = f"http://roboco-agent-{session.agent_id}:{SDK_PORT}/turn"
-        client = self._client or httpx.AsyncClient(timeout=10.0)
-        try:
-            resp = await client.post(url, json={"text": text})
-            resp.raise_for_status()
-            # The one positive signal the live path had none of: without this
-            # line, a session that "opened then did nothing" left zero trace
-            # in either the orchestrator or the container log (2026-09-27
-            # intake report) — delivery success, delivery failure, and
-            # never-attempted were indistinguishable.
+        accepted = self._turn_handler(session_id, text)
+        if accepted:
             self.log.info(
-                "Live turn delivered",
+                "Live turn accepted",
                 session_id=session_id,
                 agent_id=session.agent_id,
             )
-            return True
-        except Exception as exc:
-            # Debug, not error: the opening-message delivery retries until the
-            # container's receiver is up, so transient failures here are expected
-            # and were spamming ERROR. Callers surface a real failure (the
-            # /messages route 404s; _deliver_when_ready warns once after N tries).
-            self.log.debug(
-                "Message delivery attempt failed",
-                session_id=session_id,
-                error=str(exc),
-            )
-            return False
-        finally:
-            if self._client is None:
-                await client.aclose()
+        return accepted
 
 
 # Process-wide singleton — the orchestrator owns one registry. Held on a class

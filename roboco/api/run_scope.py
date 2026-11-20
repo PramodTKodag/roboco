@@ -25,6 +25,17 @@ if TYPE_CHECKING:
 logger = structlog.get_logger()
 
 RUN_SCOPE_PATH_PREFIXES: Final[tuple[str, ...]] = ("/api/v1/flow/", "/api/v1/do/")
+# The secretary chat's own tools, by exact method and path. Confirming or rejecting
+# a directive is the CEO's act and the live-chat routes are the panel's: neither is
+# listed, so a run token can never reach them.
+_SECRETARY_RUN_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
+    {
+        ("GET", "/api/secretary/state"),
+        ("GET", "/api/secretary/tasks"),
+        ("POST", "/api/secretary/directives"),
+    }
+)
+_SECRETARY_TASK_PATH_PREFIX: Final[str] = "/api/secretary/tasks/"
 _FORWARDED_TOKEN_TTL_SECONDS: Final[float] = 60.0
 _IDENTITY_HEADERS: Final[frozenset[bytes]] = frozenset(
     {b"x-agent-id", b"x-agent-role", b"x-agent-team", b"x-agent-token"}
@@ -76,6 +87,18 @@ def _header(scope: Scope, name: bytes) -> str | None:
     return None
 
 
+def _run_token_may_reach(method: str, path: str) -> bool:
+    if path.startswith(RUN_SCOPE_PATH_PREFIXES):
+        return True
+    if (method, path) in _SECRETARY_RUN_ROUTES:
+        return True
+    return (
+        method == "GET"
+        and path.startswith(_SECRETARY_TASK_PATH_PREFIX)
+        and "/" not in path[len(_SECRETARY_TASK_PATH_PREFIX) :]
+    )
+
+
 class RunScopeMiddleware:
     def __init__(self, app: ASGIApp, *, active_runs: ActiveRuns = ACTIVE_RUNS) -> None:
         self._app = app
@@ -94,7 +117,7 @@ class RunScopeMiddleware:
             logger.warning("Run token refused: run inactive", run_id=claims.run_id)
             await _refuse(send, 401, "run is not active")
             return
-        if not scope["path"].startswith(RUN_SCOPE_PATH_PREFIXES):
+        if not _run_token_may_reach(scope["method"], scope["path"]):
             logger.warning("Run token refused: out of scope", run_id=claims.run_id)
             await _refuse(send, 403, "run token is not valid for this route")
             return

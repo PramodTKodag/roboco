@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from roboco.agent_sdk.intake_driver import StreamChunk, _extract_draft
+from roboco.agent_sdk.intake_driver import StreamChunk, extract_draft
 from roboco.agents_config import get_agent_role
 from roboco.llm.providers.grok_cli_config import grok_cli_args_for_role
 from roboco.llm.providers.grok_cli_usage import capture_session_usage
@@ -137,7 +137,7 @@ class _StreamAssembler:
         # tool POSTing straight to the relay (tool calls do not surface as stream
         # events), but if the agent typed a fenced ```roboco-draft``` block we
         # still surface it.
-        draft = _extract_draft("".join(self._text))
+        draft = extract_draft("".join(self._text))
         if draft is not None:
             out.append(StreamChunk(kind="draft", data=draft))
         out.append(

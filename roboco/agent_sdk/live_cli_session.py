@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from roboco.agent_sdk.intake_driver import StreamChunk, _extract_draft
+from roboco.agent_sdk.intake_driver import StreamChunk, extract_draft
 from roboco.agent_sdk.live_providers import LiveReplyAccumulator
 
 if TYPE_CHECKING:
@@ -202,7 +202,7 @@ class HeadlessCliTurnSession:
                 StreamChunk(kind="turn_end", data={}),
             ]
         chunks: list[StreamChunk] = []
-        draft = _extract_draft(reply)
+        draft = extract_draft(reply)
         if draft is not None:
             chunks.append(StreamChunk(kind="draft", data=draft))
         chunks.append(StreamChunk(kind="turn_end", data={}))

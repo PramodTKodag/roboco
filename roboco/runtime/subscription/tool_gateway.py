@@ -28,6 +28,7 @@ from roboco.runtime.subscription.contracts import (
     WorkerOperation,
     WorkerPayload,
     WorkerResult,
+    operations_allowed_for,
 )
 
 if TYPE_CHECKING:
@@ -86,20 +87,19 @@ def _utc_now() -> datetime:
 
 
 def _grant_for(request: RunRequest, expires_at: datetime) -> RunGrant | None:
-    """The worker grant for a delivery run; ``None`` when it needs no worker.
+    """The worker grant for a run; ``None`` when it needs no worker.
 
     A delivery run must be granted something: worker operations, business verbs
-    or both. Only worker operations need a project workspace.
+    or both. Other purposes may use only the worker operations their purpose
+    allows. Only worker operations need a project workspace.
     """
     spec = request.spec
     manifest = request.manifest
     operations = frozenset(manifest.operations) if manifest else frozenset()
     has_verbs = bool(manifest and manifest.verb_grants)
-    if spec.purpose != "delivery":
-        if operations:
-            raise ToolDenied("tools_not_allowed_for_purpose")
-        return None
-    if not operations and not has_verbs:
+    if not operations <= operations_allowed_for(spec.purpose):
+        raise ToolDenied("tools_not_allowed_for_purpose")
+    if spec.purpose == "delivery" and not operations and not has_verbs:
         raise ToolDenied("manifest_missing")
     if not operations:
         return None

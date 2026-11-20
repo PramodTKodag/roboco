@@ -41,7 +41,12 @@ TOOL_MANIFEST_FILE = "tool-manifest.json"
 _VERB_SERVER_MODULES: dict[VerbServer, str] = {
     VerbServer.FLOW: "roboco.mcp.flow_server",
     VerbServer.DO: "roboco.mcp.do_server",
+    VerbServer.INTAKE: "roboco.mcp.intake_server",
+    VerbServer.SECRETARY: "roboco.mcp.secretary_server",
 }
+# The chat servers talk to the API under their own variable names.
+_CHAT_API_URL_ENV = "ROBOCO_API_URL"
+_CHAT_SESSION_ENV = "ROBOCO_PROMPTER_SESSION_ID"
 
 
 def mcp_tool_name(operation: WorkerOperation) -> str:
@@ -127,19 +132,24 @@ def _verb_server(
     credentials: VerbCredentials,
     orchestrator_url: str,
     manifest_file: Path,
+    session_id: str | None,
 ) -> dict[str, Any]:
+    env = {
+        "PYTHONPATH": str(_IMPORT_ROOT),
+        "ROBOCO_AGENT_ID": str(credentials.agent_id),
+        "ROBOCO_AGENT_ROLE": credentials.role,
+        "ROBOCO_AGENT_TOKEN": credentials.token,
+        "ROBOCO_ORCHESTRATOR_URL": orchestrator_url,
+        "ROBOCO_TOOL_MANIFEST_PATH": str(manifest_file),
+        _CHAT_API_URL_ENV: orchestrator_url,
+    }
+    if server is VerbServer.INTAKE and session_id is not None:
+        env[_CHAT_SESSION_ENV] = session_id
     return {
         "type": "stdio",
         "command": str(python),
         "args": ["-P", "-m", _VERB_SERVER_MODULES[server]],
-        "env": {
-            "PYTHONPATH": str(_IMPORT_ROOT),
-            "ROBOCO_AGENT_ID": str(credentials.agent_id),
-            "ROBOCO_AGENT_ROLE": credentials.role,
-            "ROBOCO_AGENT_TOKEN": credentials.token,
-            "ROBOCO_ORCHESTRATOR_URL": orchestrator_url,
-            "ROBOCO_TOOL_MANIFEST_PATH": str(manifest_file),
-        },
+        "env": env,
     }
 
 
@@ -152,6 +162,7 @@ def build_mcp_config(  # noqa: PLR0913 - one builder for every trusted server
     credentials: VerbCredentials | None,
     orchestrator_url: str,
     manifest_file: Path,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """MCP config naming only trusted servers. Secrets stay in their own env."""
     servers: dict[str, Any] = {}
@@ -167,6 +178,7 @@ def build_mcp_config(  # noqa: PLR0913 - one builder for every trusted server
                 credentials=credentials,
                 orchestrator_url=orchestrator_url,
                 manifest_file=manifest_file,
+                session_id=session_id,
             )
     return {"mcpServers": servers}
 

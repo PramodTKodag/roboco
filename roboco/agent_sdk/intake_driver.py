@@ -129,7 +129,7 @@ def _coerce_spec_fields(
         ]
 
 
-def _extract_draft(text: str) -> dict[str, Any] | None:
+def extract_draft(text: str) -> dict[str, Any] | None:
     """Parse a fenced ``roboco-draft`` JSON block out of the agent's reply.
 
     A fallback to the ``propose_draft`` tool: returns the parsed object (a dict
@@ -268,7 +268,7 @@ def _blocks_to_chunks(
             if emit_text and text_part:
                 chunks.append(StreamChunk(kind="text", text=text_part))
         draft = draft or block_draft
-    draft = draft or _extract_draft("".join(text_parts))
+    draft = draft or extract_draft("".join(text_parts))
     if draft is not None:
         chunks.append(StreamChunk(kind="draft", data=draft))
     return chunks

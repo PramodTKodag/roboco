@@ -261,3 +261,95 @@ def test_cli_environment_is_an_allowlist_with_a_bounded_retry_count() -> None:
     env = build_claude_env()
     assert env["CLAUDE_CODE_MAX_RETRIES"] == str(CLI_MAX_RETRIES) == "2"
     assert not [name for name in env if name.startswith(("ANTHROPIC_", "AWS_"))]
+
+
+def _chat_manifest(server: VerbServer, verbs: tuple[str, ...]) -> ToolManifest:
+    return ToolManifest(verb_grants=(VerbGrant(server=server, verbs=verbs),))
+
+
+def test_chat_servers_launch_only_their_fixed_modules() -> None:
+    credentials = _credentials()
+    for server, module in (
+        (VerbServer.INTAKE, "roboco.mcp.intake_server"),
+        (VerbServer.SECRETARY, "roboco.mcp.secretary_server"),
+    ):
+        config = build_mcp_config(
+            python=Path("/usr/local/bin/python"),
+            socket_path=Path("/run/roboco/gateway/gateway.sock"),
+            capability=None,
+            manifest=_chat_manifest(server, ("propose_draft",)),
+            credentials=credentials,
+            orchestrator_url="http://orchestrator:8000",
+            manifest_file=Path("/run/roboco/runs/x/tool-manifest.json"),
+            session_id="3f2a9c10aabbccdd",
+        )
+        launched = config["mcpServers"][f"roboco_{server.value}"]
+        assert launched["args"] == ["-P", "-m", module]
+        assert launched["env"]["ROBOCO_API_URL"] == "http://orchestrator:8000"
+
+
+def test_only_the_intake_server_receives_the_chat_session_id() -> None:
+    credentials = _credentials()
+
+    def env_for(server: VerbServer) -> dict[str, str]:
+        config = build_mcp_config(
+            python=Path("/usr/local/bin/python"),
+            socket_path=Path("/run/roboco/gateway/gateway.sock"),
+            capability=None,
+            manifest=_chat_manifest(server, ("propose_draft",)),
+            credentials=credentials,
+            orchestrator_url="http://orchestrator:8000",
+            manifest_file=Path("/run/roboco/runs/x/tool-manifest.json"),
+            session_id="3f2a9c10aabbccdd",
+        )
+        return config["mcpServers"][f"roboco_{server.value}"]["env"]
+
+    assert env_for(VerbServer.INTAKE)["ROBOCO_PROMPTER_SESSION_ID"] == (
+        "3f2a9c10aabbccdd"
+    )
+    assert "ROBOCO_PROMPTER_SESSION_ID" not in env_for(VerbServer.SECRETARY)
+
+
+def test_chat_verbs_use_their_own_server_names() -> None:
+    assert verb_tool_name(VerbServer.INTAKE, "propose_draft") == (
+        "mcp__roboco_intake__propose_draft"
+    )
+    assert verb_tool_name(VerbServer.SECRETARY, "submit_directive") == (
+        "mcp__roboco_secretary__submit_directive"
+    )
+
+
+def test_an_intake_grant_needs_a_session_id_and_nothing_else_may_have_one() -> None:
+    manifest = _chat_manifest(VerbServer.INTAKE, ("propose_draft",))
+    spec = _spec(purpose="intake", workspace_handle=None, project_id=None)
+    with pytest.raises(ValidationError):
+        RunRequest(spec=spec, manifest=manifest, verb_credentials=_credentials())
+    RunRequest(
+        spec=spec,
+        manifest=manifest,
+        verb_credentials=_credentials(),
+        session_id="3f2a9c10aabbccdd",
+    )
+    with pytest.raises(ValidationError):
+        RunRequest(spec=_spec(), session_id="3f2a9c10aabbccdd")
+
+
+@pytest.mark.parametrize("session_id", ["short", "a/b/c/d/e/f/g", "x" * 65, "sp ace12345"])
+def test_chat_session_ids_are_validated(session_id: str) -> None:
+    with pytest.raises(ValidationError):
+        RunRequest(
+            spec=_spec(purpose="intake", workspace_handle=None, project_id=None),
+            manifest=_chat_manifest(VerbServer.INTAKE, ("propose_draft",)),
+            verb_credentials=_credentials(),
+            session_id=session_id,
+        )
+
+
+def test_a_chat_run_cannot_be_granted_another_purposes_server() -> None:
+    with pytest.raises(ValidationError):
+        RunRequest(
+            spec=_spec(purpose="secretary", workspace_handle=None, project_id=None),
+            manifest=_chat_manifest(VerbServer.INTAKE, ("propose_draft",)),
+            verb_credentials=_credentials(),
+            session_id="3f2a9c10aabbccdd",
+        )

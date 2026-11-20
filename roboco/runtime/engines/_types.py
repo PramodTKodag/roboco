@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from roboco.llm.providers import ProviderRegistry
     from roboco.models.runtime import AgentInstance, SpawnGitContext, WaitingRecord
     from roboco.models.sandbox import SandboxInfo
+    from roboco.runtime.engines.chat_turns import ChatTurnRunner
     from roboco.runtime.engines.subscription_runs import RunSupervisor
     from roboco.runtime.sandbox import SandboxProvisioner
     from roboco.services.llm import AgentRoute
@@ -90,6 +91,7 @@ class AgentOrchestratorSelf(Protocol):
     _pm_respawn_tracker: dict[tuple[str, str], dict[str, Any]]
     _provider_registry: ProviderRegistry | None
     _run_supervisor: RunSupervisor | None
+    _chat_runner: ChatTurnRunner | None
     _rate_limit_ceo_notified: set[str]
     _respawn_persist_lock: asyncio.Lock
     _resume_confirm_delay: float
@@ -301,6 +303,8 @@ class AgentOrchestratorSelf(Protocol):
     ) -> tuple[bool, int | None] | None: ...
     @staticmethod
     def _repo_key(*args: Any, **kwargs: Any) -> str: ...
+    def _ensure_run_supervisor(self) -> RunSupervisor: ...
+    def _chat_turn_runner(self) -> ChatTurnRunner: ...
     async def _resolve_agent_route(self, *args: Any, **kwargs: Any) -> AgentRoute: ...
     def _resolve_agent_slug(self, *args: Any, **kwargs: Any) -> str: ...
     @staticmethod

@@ -66,23 +66,21 @@ class SweepsEngine(_Base):
         _last_transcript_prune: datetime | None
 
     async def reap_intake_session(self, session_id: str) -> None:
-        """End a live chat: close the relay stream and stop the container."""
+        """End a live chat: close the relay stream and stop its model run."""
         from roboco.services.prompter_live import get_live_registry
 
         get_live_registry().close(session_id)
-        await self.stop_agent(
-            INTAKE_AGENT_ID, graceful=True, stop_reason="intake_session_reaped"
-        )
+        if self._chat_runner is not None:
+            await self._chat_runner.close_chat(session_id)
         logger.info("Intake session reaped", session_id=session_id)
 
     async def reap_secretary_session(self, session_id: str) -> None:
-        """End a live Secretary chat: close the relay and stop the container."""
+        """End a live Secretary chat: close the relay and stop its model run."""
         from roboco.services.prompter_live import get_live_registry
 
         get_live_registry().close(session_id)
-        await self.stop_agent(
-            SECRETARY_AGENT_ID, graceful=True, stop_reason="secretary_session_reaped"
-        )
+        if self._chat_runner is not None:
+            await self._chat_runner.close_chat(session_id)
         logger.info("Secretary session reaped", session_id=session_id)
 
     async def _reap_idle_interactive_sessions(self) -> None:

@@ -125,15 +125,31 @@ class VerbServer(StrEnum):
 
     FLOW = "flow"
     DO = "do"
+    INTAKE = "intake"
+    SECRETARY = "secretary"
 
 
 _VERB_NAME = r"^[a-z][a-z0-9_]{0,63}$"
 _SERVERS_ALLOWED_FOR_PURPOSE: dict[str, frozenset[VerbServer]] = {
     "delivery": frozenset({VerbServer.FLOW, VerbServer.DO}),
-    "intake": frozenset(),
+    "intake": frozenset({VerbServer.INTAKE}),
+    "secretary": frozenset({VerbServer.SECRETARY}),
+    "background": frozenset(),
+}
+_READ_ONLY_OPERATIONS: frozenset[WorkerOperation] = frozenset(
+    {
+        WorkerOperation.READ_FILE,
+        WorkerOperation.LIST_FILES,
+        WorkerOperation.SEARCH_TEXT,
+    }
+)
+_OPERATIONS_ALLOWED_FOR_PURPOSE: dict[str, frozenset[WorkerOperation]] = {
+    "delivery": frozenset(WorkerOperation),
+    "intake": _READ_ONLY_OPERATIONS,
     "secretary": frozenset(),
     "background": frozenset(),
 }
+_SESSION_ID_PATTERN = r"^[A-Za-z0-9_-]{8,64}$"
 
 
 class VerbGrant(_Frozen):
@@ -205,10 +221,17 @@ class RunRequest(_Frozen):
     spec: RunSpec
     manifest: ToolManifest | None = None
     verb_credentials: VerbCredentials | None = None
+    # The live chat the intake tools post drafts to; set only with an intake grant.
+    session_id: Annotated[str, StringConstraints(pattern=_SESSION_ID_PATTERN)] | None = (
+        None
+    )
 
     @model_validator(mode="after")
     def _verbs_match_purpose_and_credentials(self) -> Self:
         grants = self.manifest.verb_grants if self.manifest else ()
+        wants_session = any(grant.server is VerbServer.INTAKE for grant in grants)
+        if wants_session != (self.session_id is not None):
+            raise ValueError("a chat session id goes with the intake grant only")
         if not grants:
             return self
         if self.verb_credentials is None:
@@ -221,6 +244,10 @@ class RunRequest(_Frozen):
 
 def servers_allowed_for(purpose: str) -> frozenset[VerbServer]:
     return _SERVERS_ALLOWED_FOR_PURPOSE.get(purpose, frozenset())
+
+
+def operations_allowed_for(purpose: str) -> frozenset[WorkerOperation]:
+    return _OPERATIONS_ALLOWED_FOR_PURPOSE.get(purpose, frozenset())
 
 
 class RunResult(_Frozen):

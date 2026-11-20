@@ -57,6 +57,7 @@ class FakeClient:
         spec: RunSpec,
         manifest: ToolManifest | None = None,
         verb_credentials: VerbCredentials | None = None,
+        session_id: str | None = None,
     ) -> RunResult:
         self.specs.append(spec)
         self.credentials.append(verb_credentials)

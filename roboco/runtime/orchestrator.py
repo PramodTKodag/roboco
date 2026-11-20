@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from roboco.llm.providers import ProviderRegistry
+    from roboco.runtime.engines.chat_turns import ChatTurnRunner
     from roboco.runtime.engines.subscription_runs import RunSupervisor
     from roboco.services.uptime import UptimeLedger
 import httpx
@@ -403,16 +404,6 @@ _OVERLOAD_MARKERS_BY_PROVIDER: dict[str, tuple[str, ...]] = {
 # below and roboco/agent_sdk/intake_main.py.
 INTAKE_AGENT_ID = "intake-1"
 
-# Ambient note telling the intake agent its cwd holds clones of every project in
-# the scope, so it drafts against the real trees (Grep/Glob/Read), not from memory.
-_INTAKE_WORKSPACE_AMBIENT = (
-    "## Workspace\n\n"
-    "Your working directory holds a clone of every project in this intake scope "
-    "— the primary project at your cwd, and for a multi-project scope each "
-    "sibling project's clone alongside it under /data/workspaces. All are "
-    "readable via Grep/Glob/Read; draft against the real trees, not from memory."
-)
-
 # The Secretary agent: a single seeded, persistent chief-of-staff container the
 # CEO chats with (like intake), but with gated CEO authority. One container at a
 # time. Seeded in identity.AGENTS; see roboco/agent_sdk/secretary_main.py.
@@ -713,27 +704,6 @@ class _SlaBreach:
     sla_seconds: int
 
 
-@dataclass(frozen=True)
-class _IntakeRunSpec:
-    """Inputs for ``_build_intake_run_cmd``, bundled to keep the signature small."""
-
-    container_name: str
-    image: str
-    hosts: dict[str, str | None]
-    session_id: str
-    cwd: str
-    cli_model: str
-    api_url: str
-    provider_base_url: str | None
-    provider_auth_token: str | None
-    provider_type: str = "anthropic"
-    model: str = ""
-    # The scoped project's UUID (single-project scope only, else ""). The
-    # live-chat draft bridge bakes it into the propose_draft description: the
-    # panel validates the_work[].project_id as a UUID the agent cannot guess.
-    project_uuid: str = ""
-
-
 @dataclass
 class _StrategyLoopState:
     """Consecutive-failure tracking for ``_strategy_engine_loop`` (#193).
@@ -745,29 +715,6 @@ class _StrategyLoopState:
 
     failures: int = 0
     notified: bool = False
-
-
-@dataclass
-class _SecretaryRunSpec:
-    """Inputs for ``_build_secretary_run_cmd`` (mirrors ``_IntakeRunSpec``).
-
-    Adds the agent uuid + HMAC token: unlike intake, the Secretary's tools call
-    the backend, so the container needs an authenticated identity.
-    """
-
-    container_name: str
-    image: str
-    hosts: dict[str, str | None]
-    session_id: str
-    cwd: str
-    cli_model: str
-    api_url: str
-    agent_uuid: str
-    agent_token: str
-    provider_base_url: str | None
-    provider_auth_token: str | None
-    provider_type: str = "anthropic"
-    model: str = ""
 
 
 # Roles that always work a concrete task — a spawn row with ``task_id IS NULL``
@@ -1488,6 +1435,7 @@ class AgentOrchestrator(
         # runs on the trusted service, not containers. Built lazily and fails
         # closed when the service is not configured.
         self._run_supervisor: RunSupervisor | None = None
+        self._chat_runner: ChatTurnRunner | None = None
         # Tracks which providers have already received a CEO notification
         # during the current rate-limit episode.  Cleared when the probe
         # succeeds and the rate limit is lifted (tracker.clear() path).

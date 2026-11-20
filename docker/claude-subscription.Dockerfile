@@ -24,7 +24,8 @@ COPY roboco/__init__.py roboco/agents_config.py roboco/config.py roboco/exceptio
 COPY roboco/foundation /opt/service/roboco/foundation
 COPY roboco/models /opt/service/roboco/models
 COPY roboco/seeds /opt/service/roboco/seeds
-COPY roboco/mcp/__init__.py roboco/mcp/flow_server.py roboco/mcp/do_server.py roboco/mcp/utils.py /opt/service/roboco/mcp/
+COPY roboco/mcp/__init__.py roboco/mcp/flow_server.py roboco/mcp/do_server.py roboco/mcp/intake_server.py roboco/mcp/secretary_server.py roboco/mcp/utils.py /opt/service/roboco/mcp/
+COPY roboco/agent_sdk/__init__.py roboco/agent_sdk/secretary_driver.py /opt/service/roboco/agent_sdk/
 COPY roboco/runtime/__init__.py /opt/service/roboco/runtime/__init__.py
 COPY roboco/runtime/subscription /opt/service/roboco/runtime/subscription
 

@@ -70,9 +70,13 @@ class SubscriptionClient:
         spec: RunSpec,
         manifest: ToolManifest | None = None,
         verb_credentials: VerbCredentials | None = None,
+        session_id: str | None = None,
     ) -> RunResult:
         request = RunRequest(
-            spec=spec, manifest=manifest, verb_credentials=verb_credentials
+            spec=spec,
+            manifest=manifest,
+            verb_credentials=verb_credentials,
+            session_id=session_id,
         )
         response = await self._call(
             ServiceAction.RUN,

@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 from uuid import UUID, uuid4
 
 from roboco.agents_config import issue_run_token
@@ -139,6 +139,7 @@ class RunClient(Protocol):
         spec: RunSpec,
         manifest: ToolManifest | None = None,
         verb_credentials: VerbCredentials | None = None,
+        session_id: str | None = None,
     ) -> RunResult: ...
 
     async def cancel(self, run_id: UUID) -> None: ...
@@ -146,7 +147,7 @@ class RunClient(Protocol):
 
 @dataclass(frozen=True)
 class RunLaunch:
-    """Everything a delivery spawn needs to become one model run."""
+    """Everything a spawn or chat turn needs to become one model run."""
 
     agent_slug: str
     agent_id: UUID
@@ -158,6 +159,15 @@ class RunLaunch:
     task_id: UUID | None = None
     project_id: UUID | None = None
     workspace_handle: UUID | None = None
+    purpose: Literal["delivery", "intake", "secretary"] = "delivery"
+    session_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _RunInputs:
+    manifest: ToolManifest
+    credentials: VerbCredentials
+    session_id: str | None
 
 
 class _Run:
@@ -196,7 +206,7 @@ class RunSupervisor:
             project_id=launch.project_id,
             task_id=launch.task_id,
             agent_id=launch.agent_id,
-            purpose="delivery",
+            purpose=launch.purpose,
             model=model,
             prompt=launch.prompt,
             workspace_handle=launch.workspace_handle,
@@ -225,7 +235,10 @@ class RunSupervisor:
         self._active_runs.activate(str(run_id))
         task = asyncio.create_task(
             self._drive(
-                launch.agent_slug, spec, launch.manifest, credentials, registered
+                launch.agent_slug,
+                spec,
+                _RunInputs(launch.manifest, credentials, launch.session_id),
+                registered,
             ),
             name=f"model-run-{launch.agent_slug}",
         )
@@ -242,12 +255,13 @@ class RunSupervisor:
         self,
         agent_slug: str,
         spec: RunSpec,
-        manifest: ToolManifest,
-        credentials: VerbCredentials,
+        inputs: _RunInputs,
         registered: bool,
     ) -> RunResult:
         try:
-            result = await self._client.run(spec, manifest, credentials)
+            result = await self._client.run(
+                spec, inputs.manifest, inputs.credentials, inputs.session_id
+            )
         except Exception:
             logger.exception(
                 "Model run crashed: agent=%s run=%s", agent_slug, spec.run_id
@@ -282,6 +296,16 @@ class RunSupervisor:
             await self._registrar.cancel_run(run_id)
         except Exception:
             logger.exception("Worker run release failed: run=%s", run_id)
+
+    async def result(self, agent_slug: str) -> RunResult | None:
+        """Wait for the agent's current run to end; ``None`` if it has none."""
+        record = self._runs.get(agent_slug)
+        if record is None:
+            return None
+        try:
+            return await record.task
+        except asyncio.CancelledError:
+            return None
 
     def owns(self, agent_slug: str) -> bool:
         return agent_slug in self._runs

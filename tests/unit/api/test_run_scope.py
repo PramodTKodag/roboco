@@ -106,7 +106,10 @@ class Downstream:
 
 
 async def _call(
-    gate: RunScopeMiddleware, path: str, headers: list[tuple[bytes, bytes]]
+    gate: RunScopeMiddleware,
+    path: str,
+    headers: list[tuple[bytes, bytes]],
+    method: str = "GET",
 ) -> tuple[int, list[Message]]:
     sent: list[Message] = []
 
@@ -116,7 +119,7 @@ async def _call(
     async def send(message: Message) -> None:
         sent.append(message)
 
-    scope = {"type": "http", "path": path, "headers": headers}
+    scope = {"type": "http", "method": method, "path": path, "headers": headers}
     await gate(scope, receive, send)
     return sent[0]["status"], sent
 
@@ -153,6 +156,44 @@ async def test_do_routes_are_in_scope() -> None:
     gate, _ = _gate()
     status, _ = await _call(gate, "/api/v1/do/commit", _headers(_token()))
     assert status == HTTPStatus.OK
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/api/secretary/state"),
+        ("GET", "/api/secretary/tasks"),
+        ("GET", "/api/secretary/tasks/3f2a9c10-0000-4000-8000-000000000009"),
+        ("POST", "/api/secretary/directives"),
+    ],
+)
+async def test_the_secretary_chat_tools_are_in_scope(method: str, path: str) -> None:
+    gate, downstream = _gate()
+    status, _ = await _call(gate, path, _headers(_token()), method)
+    assert status == HTTPStatus.OK
+    assert downstream.scope is not None
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/api/secretary/state"),
+        ("GET", "/api/secretary/directives"),
+        ("POST", "/api/secretary/directives/abc/confirm"),
+        ("POST", "/api/secretary/directives/abc/reject"),
+        ("GET", "/api/secretary/tasks/abc/notes"),
+        ("POST", "/api/secretary/live/start"),
+        ("POST", "/api/secretary/live/abc12345/events"),
+        ("GET", "/api/secretary/directives/"),
+    ],
+)
+async def test_other_secretary_routes_stay_out_of_scope(
+    method: str, path: str
+) -> None:
+    gate, downstream = _gate()
+    status, _ = await _call(gate, path, _headers(_token()), method)
+    assert status == HTTPStatus.FORBIDDEN
+    assert downstream.scope is None
 
 
 @pytest.mark.parametrize(
