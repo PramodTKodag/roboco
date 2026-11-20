@@ -18,6 +18,7 @@ from roboco.runtime.subscription.contracts import CLI_MAX_RETRIES
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from urllib.parse import SplitResult
 
     from roboco.config import Settings
 
@@ -79,21 +80,25 @@ def parse_egress_route(proxy_url: str, ca_file: str) -> EgressRoute:
         port = parts.port
     except ValueError as exc:
         raise EgressRouteInvalid("proxy port is invalid") from exc
-    if (
-        parts.scheme != "http"
-        or not parts.hostname
-        or port is None
-        or parts.username is not None
-        or parts.password is not None
-        or parts.path not in {"", "/"}
-        or parts.query
-        or parts.fragment
-    ):
+    if not _is_bare_http_host_port(parts, port):
         raise EgressRouteInvalid("proxy URL must be http://host:port")
     ca = PurePosixPath(ca_file)
     if not ca.is_absolute() or ".." in ca.parts:
         raise EgressRouteInvalid("CA path must be absolute")
     return EgressRoute(proxy_url=f"http://{parts.hostname}:{port}", ca_file=str(ca))
+
+
+def _is_bare_http_host_port(parts: SplitResult, port: int | None) -> bool:
+    """True for ``http://host:port`` with no credentials, path, query or fragment."""
+    has_credentials = parts.username is not None or parts.password is not None
+    has_extras = parts.path not in {"", "/"} or bool(parts.query or parts.fragment)
+    return (
+        parts.scheme == "http"
+        and bool(parts.hostname)
+        and port is not None
+        and not has_credentials
+        and not has_extras
+    )
 
 
 def build_claude_env(egress: EgressRoute | None = None) -> dict[str, str]:

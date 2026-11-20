@@ -56,7 +56,8 @@ def test_target_anthropic_is_never_probed() -> None:
     assert headers == {}
 
 
-def test_target_ollama_uses_tags_endpoint(direct_model_clients_on: None) -> None:
+@pytest.mark.usefixtures("direct_model_clients_on")
+def test_target_ollama_uses_tags_endpoint() -> None:
     url, _headers = AgentOrchestrator._probe_target("ollama_cloud")
     assert url is not None
     assert url.endswith("/api/tags")
@@ -71,25 +72,24 @@ def test_target_unknown_provider_is_unprobeable() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_probe_ollama_ok_is_lifted(
-    orch: AgentOrchestrator, direct_model_clients_on: None
-) -> None:
+@pytest.mark.usefixtures("direct_model_clients_on")
+async def test_probe_ollama_ok_is_lifted(orch: AgentOrchestrator) -> None:
     fake = _fake_async_client(status_code=_HTTP_OK)
     with patch("roboco.runtime.orchestrator.httpx.AsyncClient", fake):
         assert await orch._do_probe("ollama_cloud") is True
 
 
-async def test_probe_ollama_429_stays_limited(
-    orch: AgentOrchestrator, direct_model_clients_on: None
-) -> None:
+@pytest.mark.usefixtures("direct_model_clients_on")
+async def test_probe_ollama_429_stays_limited(orch: AgentOrchestrator) -> None:
     fake = _fake_async_client(status_code=_HTTP_TOO_MANY_REQUESTS)
     with patch("roboco.runtime.orchestrator.httpx.AsyncClient", fake):
         assert await orch._do_probe("ollama_cloud") is False
 
 
 @pytest.mark.parametrize("status", [500, 503, 529])
+@pytest.mark.usefixtures("direct_model_clients_on")
 async def test_probe_ollama_5xx_stays_parked(
-    orch: AgentOrchestrator, direct_model_clients_on: None, status: int
+    orch: AgentOrchestrator, status: int
 ) -> None:
     """A 5xx (overload) keeps the provider parked — resuming would re-overload it."""
     fake = _fake_async_client(status_code=status)
@@ -97,9 +97,8 @@ async def test_probe_ollama_5xx_stays_parked(
         assert await orch._do_probe("ollama_cloud") is False
 
 
-async def test_probe_network_error_stays_parked(
-    orch: AgentOrchestrator, direct_model_clients_on: None
-) -> None:
+@pytest.mark.usefixtures("direct_model_clients_on")
+async def test_probe_network_error_stays_parked(orch: AgentOrchestrator) -> None:
     fake = _fake_async_client(raise_exc=httpx.ConnectError("boom"))
     with patch("roboco.runtime.orchestrator.httpx.AsyncClient", fake):
         assert await orch._do_probe("ollama_cloud") is False

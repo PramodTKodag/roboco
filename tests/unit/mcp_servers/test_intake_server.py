@@ -8,6 +8,8 @@ import httpx
 import pytest
 from roboco.mcp import intake_server
 
+_EXPECTED_INTAKE_CALLS = 2
+
 
 def _client(handler: Any) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -499,7 +501,7 @@ async def test_relay_calls_carry_the_runs_identity_and_token(
         await intake_server.post_draft("sess-1", {"title": "X"}, client=client)
         await intake_server.query_past_tasks("sess-1", "login", client=client)
 
-    assert len(seen) == 2
+    assert len(seen) == _EXPECTED_INTAKE_CALLS
     for request in seen:
         assert request.headers["x-agent-id"] == "agent-id-1"
         assert request.headers["x-agent-role"] == "prompter"

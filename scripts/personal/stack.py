@@ -25,11 +25,10 @@ import sys
 import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
-from uuid import UUID
 from pathlib import Path
+from uuid import UUID
 
 import probe_cli_contract as cli_contract
-
 from roboco.foundation.policy.subscription_policy import (
     classify_auth_status_text,
     forbidden_env_names,
@@ -46,8 +45,14 @@ POLICY_DIGEST_FILE = REPO_ROOT / "deploy" / "personal" / "egress-policy.sha256"
 WORKER_IMAGE_SERVICE = "worker-image"
 SERVICE_CLI = "/opt/claude/claude"
 DEFAULT_PORT = "3300"
+MIN_PORT = 1024
+MAX_PORT = 65535
 OWNER_EMAIL = "owner@localhost.localdomain"
-TOKEN_NAMES = ("claude_service_token", "launcher_admin_token", "launcher_executor_token")
+TOKEN_NAMES = (
+    "claude_service_token",
+    "launcher_admin_token",
+    "launcher_executor_token",
+)
 IMPORT_SCRIPT = REPO_ROOT / "scripts" / "personal" / "import_workspace.py"
 IMPORT_MOUNT = "/import/source"
 HANDLE_LINE = re.compile(r"^workspace handle: ([0-9a-f-]{36})$", re.MULTILINE)
@@ -72,8 +77,10 @@ def refuse_inherited_credentials(environ: dict[str, str] | os._Environ[str]) -> 
 def owner_url() -> str:
     """The published panel origin; the port is the owner's single setting."""
     port = os.environ.get("ROBOCO_PERSONAL_PORT", DEFAULT_PORT)
-    if not port.isdigit() or not 1024 <= int(port) <= 65535:
-        raise StackRefused("ROBOCO_PERSONAL_PORT must be a port between 1024 and 65535")
+    if not port.isdigit() or not MIN_PORT <= int(port) <= MAX_PORT:
+        raise StackRefused(
+            f"ROBOCO_PERSONAL_PORT must be a port between {MIN_PORT} and {MAX_PORT}"
+        )
     return f"http://localhost:{port}"
 
 
@@ -116,9 +123,7 @@ def ensure_state(state: Path = STATE_DIR) -> None:
         "ROBOCO_CLOUD_AUTH_EMAIL": OWNER_EMAIL,
         "ROBOCO_CLOUD_AUTH_PASSWORD": panel_password,
     }
-    _write_private(
-        env_file, "".join(f"{k}={v}\n" for k, v in values.items()), 0o600
-    )
+    _write_private(env_file, "".join(f"{k}={v}\n" for k, v in values.items()), 0o600)
     _write_private(
         state / "panel-login.txt",
         f"Panel login (local only)\nemail: {OWNER_EMAIL}\npassword: {panel_password}\n",
@@ -151,8 +156,8 @@ def staged_cli_context() -> tuple[Path, str]:
 
 
 def _source_tag() -> str:
-    result = subprocess.run(  # noqa: S603  # nosec B603 B607
-        ["git", "rev-parse", "--short=12", "HEAD"],  # noqa: S607
+    result = subprocess.run(  # nosec B603 B607
+        ["git", "rev-parse", "--short=12", "HEAD"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -191,7 +196,7 @@ def _compose_argv(*args: str) -> list[str]:
 
 
 def _run(argv: list[str], *, capture: bool = False) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(  # noqa: S603  # nosec B603
+    return subprocess.run(  # nosec B603
         argv,
         cwd=REPO_ROOT,
         text=True,
@@ -212,7 +217,9 @@ def _require_ok(result: subprocess.CompletedProcess[str], what: str) -> str:
 
 def _built_worker_image() -> str:
     tag = f"roboco-personal-worker:{_source_tag()}"
-    inspected = _run(["docker", "image", "inspect", "--format", "{{.Id}}", tag], capture=True)
+    inspected = _run(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", tag], capture=True
+    )
     return _require_ok(inspected, "reading the worker image id").strip()
 
 
@@ -231,8 +238,12 @@ def up() -> None:
     preflight()
     _require_ok(_compose("--profile", "build", "build"), "building the images")
     write_derived_env(_built_worker_image())
-    _require_ok(_compose("up", "--detach", "--wait", "--remove-orphans"), "starting the stack")
-    print(f"RoboCo is up at {owner_url()} (panel login: {STATE_DIR / 'panel-login.txt'})")
+    _require_ok(
+        _compose("up", "--detach", "--wait", "--remove-orphans"), "starting the stack"
+    )
+    print(
+        f"RoboCo is up at {owner_url()} (panel login: {STATE_DIR / 'panel-login.txt'})"
+    )
 
 
 def stop() -> None:
@@ -255,7 +266,11 @@ def subscription_state() -> str:
         SERVICE_CLI, "auth", "status", "--json",
         capture=True,
     )  # fmt: skip
-    return classify_auth_status_text(result.stdout) if result.returncode == 0 else "login_required"
+    return (
+        classify_auth_status_text(result.stdout)
+        if result.returncode == 0
+        else "login_required"
+    )
 
 
 def status() -> None:
@@ -312,12 +327,17 @@ def login() -> None:
     targets: list[str] = []
     try:
         _require_ok(
-            subprocess.run(  # noqa: S603  # nosec B603
-                _compose_argv("up", "--detach", "--wait", "--force-recreate", "egress-proxy"),
-                cwd=REPO_ROOT, env=env, check=False, text=True,
+            subprocess.run(  # nosec B603
+                _compose_argv(
+                    "up", "--detach", "--wait", "--force-recreate", "egress-proxy"
+                ),
+                cwd=REPO_ROOT,
+                env=env,
+                check=False,
+                text=True,
             ),
             "switching the egress proxy to the login profile",
-        )  # fmt: skip
+        )
         _compose(
             "run", "--rm", "--no-deps", "--entrypoint", SERVICE_CLI,
             *_claude_env_flags(), "claude-service", "auth", "login",
@@ -332,11 +352,23 @@ def login() -> None:
 
 def check() -> None:
     preflight()
-    _require_ok(_compose("--profile", "build", "config", "--quiet"), "validating the compose file")
+    _require_ok(
+        _compose("--profile", "build", "config", "--quiet"),
+        "validating the compose file",
+    )
     tests = _run(
-        [sys.executable, "-m", "pytest", "tests/unit/subscription", "tests/security/subscription",
-         "--no-cov", "-p", "no:cacheprovider", "-q"]
-    )  # fmt: skip
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/unit/subscription",
+            "tests/security/subscription",
+            "--no-cov",
+            "-p",
+            "no:cacheprovider",
+            "-q",
+        ]
+    )
     if tests.returncode != 0:
         raise StackRefused("the subscription test suites failed")
 
@@ -352,8 +384,12 @@ def owner_session() -> urllib.request.OpenerDirector:
     # The local access guard checks Origin on state-changing calls, as it does
     # for the owner's browser.
     opener.addheaders = [("Origin", owner_url())]
-    form = urllib.parse.urlencode({"username": OWNER_EMAIL, "password": password}).encode()
-    opener.open(urllib.request.Request(f"{owner_url()}/api/auth/login", data=form), timeout=15)  # noqa: S310  # nosec B310
+    form = urllib.parse.urlencode(
+        {"username": OWNER_EMAIL, "password": password}
+    ).encode()
+    opener.open(
+        urllib.request.Request(f"{owner_url()}/api/auth/login", data=form), timeout=15
+    )  # nosec B310
     return opener
 
 
@@ -373,13 +409,13 @@ def validate_import_source(source: Path) -> Path:
 
 def _link_workspace(project_id: UUID, handle: str) -> None:
     opener = owner_session()
-    request = urllib.request.Request(  # noqa: S310
+    request = urllib.request.Request(
         f"{owner_url()}/api/projects/{project_id}/offline-workspace",
         data=json.dumps({"workspace_handle": handle}).encode(),
         headers={"Content-Type": "application/json"},
         method="PUT",
     )
-    opener.open(request, timeout=30)  # noqa: S310  # nosec B310
+    opener.open(request, timeout=30)  # nosec B310
 
 
 def import_project(
@@ -399,12 +435,21 @@ def import_project(
     if dry_run:
         arguments.append("--dry-run")
     result = _compose(
-        "run", "--rm", "--no-deps", "--no-TTY",
-        "--volume", f"{mounted}:{IMPORT_MOUNT}:ro",
-        "--volume", f"{IMPORT_SCRIPT}:/opt/import_workspace.py:ro",
-        "--entrypoint", "python", "orchestrator", "/opt/import_workspace.py", *arguments,
+        "run",
+        "--rm",
+        "--no-deps",
+        "--no-TTY",
+        "--volume",
+        f"{mounted}:{IMPORT_MOUNT}:ro",
+        "--volume",
+        f"{IMPORT_SCRIPT}:/opt/import_workspace.py:ro",
+        "--entrypoint",
+        "python",
+        "orchestrator",
+        "/opt/import_workspace.py",
+        *arguments,
         capture=True,
-    )  # fmt: skip
+    )
     print(result.stdout, end="")
     if result.returncode != 0:
         raise StackRefused("the import was refused; review the findings above")
@@ -420,8 +465,10 @@ def import_project(
 def export_reviewed_patches(task_id: str, out_dir: Path) -> list[Path]:
     """Write the task's accepted patches, in apply order, as numbered files."""
     opener = owner_session()
-    url = f"{owner_url()}/api/tasks/{urllib.parse.quote(task_id, safe='')}/review-export"
-    with opener.open(url, timeout=30) as response:  # noqa: S310  # nosec B310
+    url = (
+        f"{owner_url()}/api/tasks/{urllib.parse.quote(task_id, safe='')}/review-export"
+    )
+    with opener.open(url, timeout=30) as response:  # nosec B310
         patches = json.load(response)["patches"]
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
@@ -435,7 +482,10 @@ def export_reviewed_patches(task_id: str, out_dir: Path) -> list[Path]:
 def export(task_id: str, out_dir: Path) -> None:
     preflight()
     written = export_reviewed_patches(task_id, out_dir)
-    print(f"{len(written)} patch(es) written to {out_dir}; apply in order with `git apply`")
+    print(
+        f"{len(written)} patch(es) written to {out_dir}; "
+        "apply in order with `git apply`"
+    )
 
 
 def main(argv: list[str]) -> int:
@@ -448,7 +498,9 @@ def main(argv: list[str]) -> int:
     import_parser.add_argument("project_id", type=UUID)
     import_parser.add_argument("source", type=Path)
     import_parser.add_argument("--exclude", action="append", default=[], metavar="GLOB")
-    import_parser.add_argument("--allow", action="append", default=[], metavar="PATH:RULE")
+    import_parser.add_argument(
+        "--allow", action="append", default=[], metavar="PATH:RULE"
+    )
     import_parser.add_argument("--dry-run", action="store_true")
     export_parser = commands.add_parser("export")
     export_parser.add_argument("task_id")

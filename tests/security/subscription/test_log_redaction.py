@@ -95,7 +95,9 @@ def test_counters_named_like_tokens_are_kept() -> None:
 
 
 @pytest.fixture
-def request_log(capfd: pytest.CaptureFixture[str]) -> Iterator[TestClient]:
+def request_log(request: pytest.FixtureRequest) -> Iterator[TestClient]:
+    # Capture must be live before logging is configured so its handlers bind to it.
+    request.getfixturevalue("capfd")
     setup_logging()
     # The test client's own transport logs the full URL; only the server's logs
     # are under test.

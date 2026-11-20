@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from roboco.config import Settings
@@ -43,7 +44,7 @@ def test_forbidden_flag_is_a_real_setting_that_defaults_off(flag: str) -> None:
 def test_forbidden_flag_cannot_be_switched_on_by_configuration(flag: str) -> None:
     # Constructed without validation: a flag with cross-field prerequisites
     # (the Mini App needs cloud auth) must still be refused on its own.
-    armed = Settings.model_construct(**{flag: True})
+    armed = Settings.model_construct(**cast("dict[str, Any]", {flag: True}))
     with pytest.raises(SubscriptionPolicyViolation) as caught:
         validate_subscription_policy(armed, environ={})
     assert caught.value.violations == (f"ROBOCO_{flag.upper()}",)

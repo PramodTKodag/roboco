@@ -80,7 +80,7 @@ class RecordingApi:
                 self.end_headers()
                 self.wfile.write(payload)
 
-            do_GET = do_POST = _record  # noqa: N815 - http.server naming
+            do_GET = do_POST = _record
 
             def log_message(self, *_: object) -> None:
                 return
@@ -127,9 +127,9 @@ async def main() -> None:
     options = json.loads(sys.stdin.read())
     real_env = policy.build_claude_env
 
-    def synthetic_env() -> dict[str, str]:
+    def synthetic_env(egress: policy.EgressRoute | None = None) -> dict[str, str]:
         return {
-            **real_env(),
+            **real_env(egress),
             "ANTHROPIC_BASE_URL": options["base_url"],
             "ANTHROPIC_API_KEY": "synthetic-transport-key",
         }

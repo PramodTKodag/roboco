@@ -22,6 +22,8 @@ import sys
 import textwrap
 import time
 from dataclasses import asdict, dataclass
+from http import HTTPStatus
+from string import Template
 from uuid import uuid4
 
 PROBE_LABEL = "roboco.personal.network-probe"
@@ -31,8 +33,9 @@ PROXY_SERVICE = "egress-proxy"
 PROXY_PORT = 8080
 CA_PATH = "/ca/mitmproxy-ca-cert.pem"
 
-_PROBE = textwrap.dedent(
-    """
+_PROBE = Template(
+    textwrap.dedent(
+        """
     import http.client, json, socket, ssl, sys
 
     mode, proxy, collector, canary = sys.argv[1:5]
@@ -45,9 +48,11 @@ _PROBE = textwrap.dedent(
             return False
 
     def tunnel(host, method, target):
-        context = ssl.create_default_context(cafile="%(ca)s")
+        context = ssl.create_default_context(cafile="$ca")
         try:
-            conn = http.client.HTTPSConnection(proxy, %(port)d, context=context, timeout=15)
+            conn = http.client.HTTPSConnection(
+                proxy, $port, context=context, timeout=15
+            )
             conn.set_tunnel(host, 443)
             conn.request(method, target, body=canary, headers={"X-Canary": canary})
             return conn.getresponse().status
@@ -72,19 +77,20 @@ _PROBE = textwrap.dedent(
         out["host_gateway_name"] = True
     except OSError:
         out["host_gateway_name"] = False
-    out["collector_direct"] = connects((collector, %(collector_port)d))
-    out["proxy_reachable"] = connects((proxy, %(port)d))
+    out["collector_direct"] = connects((collector, $collector_port))
+    out["proxy_reachable"] = connects((proxy, $port))
     print(json.dumps(out))
     """
-    % {"ca": CA_PATH, "port": PROXY_PORT, "collector_port": COLLECTOR_PORT}
-)
+    )
+).substitute(ca=CA_PATH, port=PROXY_PORT, collector_port=COLLECTOR_PORT)
 
-_COLLECTOR = textwrap.dedent(
-    """
+_COLLECTOR = Template(
+    textwrap.dedent(
+        """
     import socket, sys
     server = socket.socket()
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(("0.0.0.0", %(port)d))
+    server.bind(("0.0.0.0", $port))
     server.listen()
     print("collector ready", flush=True)
     while True:
@@ -92,8 +98,8 @@ _COLLECTOR = textwrap.dedent(
         print("collector connection", flush=True)
         conn.close()
     """
-    % {"port": COLLECTOR_PORT}
-)
+    )
+).substitute(port=COLLECTOR_PORT)
 
 
 @dataclass(frozen=True)
@@ -105,7 +111,7 @@ class CheckResult:
 
 def _docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["docker", *args],  # noqa: S607 - fixed argv
+        ["docker", *args],
         capture_output=True,
         text=True,
         check=check,
@@ -133,18 +139,27 @@ def _probe(
     mode: str,
     image: str,
     network: str,
-    proxy: str,
     collector: str,
     ca_volume: str | None,
 ) -> dict[str, object]:
     args = [
-        "run", "--rm", "--label", PROBE_LABEL, "--network", network,
-        "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-        "--entrypoint", "python",
-    ]  # fmt: skip
+        "run",
+        "--rm",
+        "--label",
+        PROBE_LABEL,
+        "--network",
+        network,
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--entrypoint",
+        "python",
+    ]
     if ca_volume is not None:
         args += ["-v", f"{ca_volume}:/ca:ro"]
-    args += [image, "-c", _PROBE, mode, proxy, collector, CANARY]
+    args += [image, "-c", _PROBE, mode, PROXY_SERVICE, collector, CANARY]
     return json.loads(_docker(*args).stdout)
 
 
@@ -152,7 +167,9 @@ def _expect(name: str, ok: bool, detail: str) -> CheckResult:
     return CheckResult(name, ok, detail if not ok else "ok")
 
 
-def run_checks(project: str, service_image: str, worker_image: str) -> list[CheckResult]:
+def run_checks(
+    project: str, service_image: str, worker_image: str
+) -> list[CheckResult]:
     network = f"{project}_runtime"
     ca_volume = f"{project}_egress_ca_public"
     proxy_container = _project_container(project, PROXY_SERVICE)
@@ -160,14 +177,28 @@ def run_checks(project: str, service_image: str, worker_image: str) -> list[Chec
     collector = f"roboco-probe-collector-{suffix}"
     results: list[CheckResult] = []
     _docker(
-        "run", "-d", "--name", collector, "--label", PROBE_LABEL,
-        "--network", network, "--read-only", "--cap-drop", "ALL",
-        "--entrypoint", "python", service_image, "-u", "-c", _COLLECTOR,
-    )  # fmt: skip
+        "run",
+        "-d",
+        "--name",
+        collector,
+        "--label",
+        PROBE_LABEL,
+        "--network",
+        network,
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--entrypoint",
+        "python",
+        service_image,
+        "-u",
+        "-c",
+        _COLLECTOR,
+    )
     try:
         time.sleep(1)
-        runtime = _probe("runtime", service_image, network, PROXY_SERVICE, collector, ca_volume)
-        worker = _probe("worker", worker_image, "none", PROXY_SERVICE, collector, None)
+        runtime = _probe("runtime", service_image, network, collector, ca_volume)
+        worker = _probe("worker", worker_image, "none", collector, None)
         results += _runtime_results(runtime) + _worker_results(worker)
         collected = _docker("logs", collector).stdout.count("collector connection")
         # The runtime's own direct attempt to the collector is the only allowed
@@ -182,7 +213,7 @@ def run_checks(project: str, service_image: str, worker_image: str) -> list[Chec
             )
         )
         _docker("stop", "--time", "2", proxy_container)
-        stopped = _probe("runtime", service_image, network, PROXY_SERVICE, collector, ca_volume)
+        stopped = _probe("runtime", service_image, network, collector, ca_volume)
         results.append(
             _expect(
                 "proxy_stopped_blocks_provider_path",
@@ -198,16 +229,49 @@ def run_checks(project: str, service_image: str, worker_image: str) -> list[Chec
 
 
 def _runtime_results(probe: dict[str, object]) -> list[CheckResult]:
+    telemetry = probe["telemetry_via_proxy"]
     return [
-        _expect("runtime_reaches_proxy", probe["proxy_reachable"] is True, "proxy unreachable"),
-        _expect("runtime_telemetry_denied_by_policy", probe["telemetry_via_proxy"] == 403, str(probe["telemetry_via_proxy"])[:60]),
-        _expect("runtime_tunnel_to_unapproved_host_refused", str(probe["collector_via_proxy"]).startswith("error"), "tunnel to collector was accepted"),
-        _expect("runtime_no_direct_ipv4", probe["direct_ipv4"] is False, "direct IPv4 connected"),
-        _expect("runtime_no_direct_ipv6", probe["direct_ipv6"] is False, "direct IPv6 connected"),
-        _expect("runtime_no_outside_dns_server", probe["direct_dns_server"] is False, "outside DNS server reachable"),
-        _expect("runtime_no_external_name_resolution", probe["external_dns"] is False, "external names resolve"),
-        _expect("runtime_no_host_gateway_name", probe["host_gateway_name"] is False, "host gateway name resolves"),
-    ]  # fmt: skip
+        _expect(
+            "runtime_reaches_proxy",
+            probe["proxy_reachable"] is True,
+            "proxy unreachable",
+        ),
+        _expect(
+            "runtime_telemetry_denied_by_policy",
+            telemetry == HTTPStatus.FORBIDDEN,
+            str(telemetry)[:60],
+        ),
+        _expect(
+            "runtime_tunnel_to_unapproved_host_refused",
+            str(probe["collector_via_proxy"]).startswith("error"),
+            "tunnel to collector was accepted",
+        ),
+        _expect(
+            "runtime_no_direct_ipv4",
+            probe["direct_ipv4"] is False,
+            "direct IPv4 connected",
+        ),
+        _expect(
+            "runtime_no_direct_ipv6",
+            probe["direct_ipv6"] is False,
+            "direct IPv6 connected",
+        ),
+        _expect(
+            "runtime_no_outside_dns_server",
+            probe["direct_dns_server"] is False,
+            "outside DNS server reachable",
+        ),
+        _expect(
+            "runtime_no_external_name_resolution",
+            probe["external_dns"] is False,
+            "external names resolve",
+        ),
+        _expect(
+            "runtime_no_host_gateway_name",
+            probe["host_gateway_name"] is False,
+            "host gateway name resolves",
+        ),
+    ]
 
 
 def _worker_results(probe: dict[str, object]) -> list[CheckResult]:
@@ -231,7 +295,9 @@ def main() -> int:
     parser.add_argument("--service-image", required=True)
     parser.add_argument("--worker-image", required=True)
     arguments = parser.parse_args()
-    results = run_checks(arguments.project, arguments.service_image, arguments.worker_image)
+    results = run_checks(
+        arguments.project, arguments.service_image, arguments.worker_image
+    )
     print(json.dumps([asdict(result) for result in results], indent=2))
     return 0 if all(result.passed for result in results) else 1
 

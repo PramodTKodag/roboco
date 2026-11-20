@@ -4,8 +4,8 @@ Verifies the post-upgrade state. The Z.ai
 row is seeded ``enabled=false`` (the GROK/OLLAMA_CLOUD posture: a
 key-collection step gates the row — PUT /providers/zai-key encrypts +
 enables in the same transaction) and ``base_url`` is NOT NULL. Z.ai routes
-via ANTHROPIC_BASE_URL injection at spawn (the OLLAMA_CLOUD shape), so the row carries Z.ai's
-Anthropic-compatible endpoint from birth.
+via ANTHROPIC_BASE_URL injection at spawn (the OLLAMA_CLOUD shape), so the row
+carries Z.ai's Anthropic-compatible endpoint from birth.
 
 NOT a real alembic round-trip: the suite builds the test DB via
 Base.metadata.create_all (see conftest). Migrations 097/098's

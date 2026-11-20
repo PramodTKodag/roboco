@@ -95,11 +95,11 @@ from roboco.services.notification_delivery import (
     get_notification_delivery_service,
 )
 from roboco.services.permissions import TaskAction
+from roboco.services.repositories.review_findings import ReviewFindingsRepository
 from roboco.services.review_artifact import (
     ReviewArtifactRefused,
     get_review_artifact_service,
 )
-from roboco.services.repositories.review_findings import ReviewFindingsRepository
 from roboco.services.task import (
     SoftBlockInput,
     TaskCreateRequest,
@@ -1408,35 +1408,17 @@ async def submit_for_verification(
     return task_to_response(task)
 
 
-@router.post("/{task_id}/submit-qa", response_model=TaskResponse)
-@guard_deco.rate_limit(requests=30, window=60)
-async def submit_for_qa(
-    task_id: UUID,
-    db: DbSession,
-    agent: CurrentAgentContext,
-) -> TaskResponse:
-    """Submit task for QA review."""
-    service = get_task_service(db)
-    task = await service.get(task_id)
-    if not task:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Task not found"
-        )
+def _refuse_unready_qa_submission(task: Any) -> None:
+    """Raise 400 unless the task passed every field-level gate before QA.
 
-    # Only assigned agent can submit for QA
-    if task.assigned_to != agent.agent_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the assigned agent can submit for QA",
-        )
-
-    # Field-level gates: dev must have committed, pushed, opened a PR,
-    # reported progress, and self-verified before QA can review. PR is
-    # REQUIRED at this stage — QA reviews on GitHub, not in a raw
-    # workspace diff. Without the pre-QA PR gate, the system falls into
-    # needless QA-fail → dev-creates-PR-in-revision cycles (pure token
-    # burn). A legitimate QA-fail (actual defect) is fine; a PR-missing
-    # fail is always avoidable.
+    Field-level gates: dev must have committed, pushed, opened a PR,
+    reported progress, and self-verified before QA can review. PR is
+    REQUIRED at this stage — QA reviews on GitHub, not in a raw
+    workspace diff. Without the pre-QA PR gate, the system falls into
+    needless QA-fail → dev-creates-PR-in-revision cycles (pure token
+    burn). A legitimate QA-fail (actual defect) is fine; a PR-missing
+    fail is always avoidable.
+    """
     if not task.self_verified:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1487,6 +1469,31 @@ async def submit_for_qa(
                 "execution — commit() auto-records a progress entry."
             ),
         )
+
+
+@router.post("/{task_id}/submit-qa", response_model=TaskResponse)
+@guard_deco.rate_limit(requests=30, window=60)
+async def submit_for_qa(
+    task_id: UUID,
+    db: DbSession,
+    agent: CurrentAgentContext,
+) -> TaskResponse:
+    """Submit task for QA review."""
+    service = get_task_service(db)
+    task = await service.get(task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Task not found"
+        )
+
+    # Only assigned agent can submit for QA
+    if task.assigned_to != agent.agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the assigned agent can submit for QA",
+        )
+
+    _refuse_unready_qa_submission(task)
 
     task = await service.submit_for_qa(task_id, agent.role)
     if not task:

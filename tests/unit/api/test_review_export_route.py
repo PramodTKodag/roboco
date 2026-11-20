@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -21,4 +22,4 @@ async def test_only_the_owner_may_export(role: AgentRole) -> None:
     with pytest.raises(HTTPException) as refused:
         await export_accepted_review_patches(uuid4(), db=None, agent=agent)  # type: ignore[arg-type]
 
-    assert refused.value.status_code == 403
+    assert refused.value.status_code == HTTPStatus.FORBIDDEN

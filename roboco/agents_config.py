@@ -32,7 +32,7 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from typing import Final
+from typing import Any, Final
 
 from roboco.foundation import identity as _foundation
 from roboco.foundation.policy import communications as _comms
@@ -180,11 +180,18 @@ class RunTokenClaims:
     expires_at: float
 
 
+@dataclass(frozen=True)
+class RunTokenSubject:
+    """The agent and model run a run-scoped token is minted for."""
+
+    agent_id: str
+    role: str
+    team: str
+    run_id: str
+
+
 def issue_run_token(
-    agent_id: str,
-    role: str,
-    team: str,
-    run_id: str,
+    subject: RunTokenSubject,
     *,
     ttl_seconds: float,
     now: float | None = None,
@@ -201,10 +208,10 @@ def issue_run_token(
     ts = now if now is not None else time.time()
     payload = json.dumps(
         {
-            "id": (agent_id or "").strip().lower(),
-            "role": (role or "").strip().lower(),
-            "team": (team or "").strip().lower(),
-            _RUN_CLAIM: run_id,
+            "id": (subject.agent_id or "").strip().lower(),
+            "role": (subject.role or "").strip().lower(),
+            "team": (subject.team or "").strip().lower(),
+            _RUN_CLAIM: subject.run_id,
             "iat": ts,
             "exp": ts + ttl_seconds,
         },
@@ -215,34 +222,46 @@ def issue_run_token(
     return f"{pb}.{sig}"
 
 
-def verify_run_token(token: str, *, now: float | None = None) -> RunTokenClaims | None:
-    """The claims of a validly signed, unexpired run token; ``None`` otherwise."""
-    secret = _auth_secret()
-    if not secret or not token or "." not in token:
-        return None
+def _signed_payload(token: str, secret: bytes) -> Any | None:
+    """The decoded payload of a correctly signed ``{payload}.{sig}`` token."""
     pb, _, sig = token.rpartition(".")
     expected_sig = hmac.new(secret, pb.encode("ascii"), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected_sig, sig):
         return None
     try:
-        payload = json.loads(_b64url_decode(pb))
+        return json.loads(_b64url_decode(pb))
     except ValueError:
         return None
+
+
+def verify_run_token(token: str, *, now: float | None = None) -> RunTokenClaims | None:
+    """The claims of a validly signed, unexpired run token; ``None`` otherwise."""
+    secret = _auth_secret()
+    if not secret or not token or "." not in token:
+        return None
+    payload = _signed_payload(token, secret)
+    if payload is None:
+        return None
+    claims = _run_claims_from_payload(payload)
+    if claims is None or claims.expires_at <= (now if now is not None else time.time()):
+        return None
+    return claims
+
+
+def _run_claims_from_payload(payload: dict[str, object]) -> RunTokenClaims | None:
+    """The run claims of a signed payload, or ``None`` if any claim is malformed."""
     expires_at = payload.get("exp")
-    fields = (payload.get("id"), payload.get("role"), payload.get("team"))
+    agent_id, role, team = payload.get("id"), payload.get("role"), payload.get("team")
     run_id = payload.get(_RUN_CLAIM)
-    if not isinstance(expires_at, int | float) or not isinstance(run_id, str):
+    if not isinstance(expires_at, int | float):
         return None
-    if not all(isinstance(field, str) for field in fields):
+    if not all(isinstance(claim, str) for claim in (agent_id, role, team, run_id)):
         return None
-    if expires_at <= (now if now is not None else time.time()):
-        return None
-    agent_id, role, team = fields
     return RunTokenClaims(
-        agent_id=agent_id,
-        role=role,
-        team=team,
-        run_id=run_id,
+        agent_id=str(agent_id),
+        role=str(role),
+        team=str(team),
+        run_id=str(run_id),
         expires_at=float(expires_at),
     )
 

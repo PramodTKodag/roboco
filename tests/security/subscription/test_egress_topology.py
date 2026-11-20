@@ -62,8 +62,8 @@ def _compose(
         **os.environ,
         "ROBOCO_EGRESS_POLICY_SHA256": digest or DIGEST_FILE.read_text().strip(),
     }
-    return subprocess.run(  # noqa: S603 - fixed argv, disposable project
-        ["docker", "compose", "-p", project, "-f", str(COMPOSE_FILE), *args],  # noqa: S607
+    return subprocess.run(
+        ["docker", "compose", "-p", project, "-f", str(COMPOSE_FILE), *args],
         capture_output=True,
         text=True,
         timeout=300,
@@ -110,15 +110,21 @@ def project() -> Iterator[str]:
 def test_compose_networks_are_isolated_as_designed(project: str) -> None:
     _start(project)
     inspected = docker(
-        "network", "inspect", f"{project}_runtime", f"{project}_egress",
-        "--format", "{{.Name}} internal={{.Internal}} ipv6={{.EnableIPv6}}",
-    )  # fmt: skip
+        "network",
+        "inspect",
+        f"{project}_runtime",
+        f"{project}_egress",
+        "--format",
+        "{{.Name}} internal={{.Internal}} ipv6={{.EnableIPv6}}",
+    )
     assert f"{project}_runtime internal=true ipv6=false" in inspected.stdout
     assert f"{project}_egress internal=false ipv6=false" in inspected.stdout
     attached = docker(
-        "inspect", "--format", "{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}",
+        "inspect",
+        "--format",
+        "{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}",
         f"{project}-egress-proxy-1",
-    ).stdout.split()  # fmt: skip
+    ).stdout.split()
     assert sorted(attached) == [f"{project}_egress", f"{project}_runtime"]
 
 

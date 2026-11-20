@@ -62,7 +62,6 @@ from roboco.services.gateway.merge_chain import (
     find_topology_issue,
     resolve_parent_branch,
 )
-from roboco.services.review_artifact import ReviewArtifactRefused
 from roboco.services.gateway.remediation import (
     hint_for_evidence_not_inspected,
     hint_for_missing_ac_coverage,
@@ -85,6 +84,7 @@ from roboco.services.repositories.review_findings import (
     STATUS_OPEN,
     ReviewFindingsRepository,
 )
+from roboco.services.review_artifact import ReviewArtifactRefused
 
 logger = structlog.get_logger()
 
@@ -305,6 +305,31 @@ def _extract_original_developer(task: Any) -> str | None:
     original developer cannot self-doc).
     """
     return markers.get_original_developer(task)
+
+
+def _spec_context(agent_id: UUID, agent: Any, task: Any) -> spec_module.Context:
+    """The spec-gate context for ``agent`` acting on ``task``."""
+    return spec_module.Context(
+        actor_id=agent_id,
+        actor_slug=getattr(agent, "slug", None) if agent is not None else None,
+        agent_team=str(agent.team) if agent is not None and agent.team else None,
+        original_developer_slug=_extract_original_developer(task),
+    )
+
+
+def _pr_already_open_envelope(
+    task: Any, briefing: dict[str, Any], role_str: str
+) -> Envelope:
+    """Idempotent ``open_pr`` re-entry: point the caller at ``i_am_done``."""
+    return Envelope.ok(
+        status=str(task.status),
+        task_id=str(task.id),
+        next=(
+            f"PR #{task.pr_number} already open; call "
+            f"i_am_done(task_id, notes='...') when self-verified"
+        ),
+        context_briefing=briefing,
+    ).with_introspection(task=task, role=role_str)
 
 
 @dataclass(frozen=True)
@@ -2613,21 +2638,8 @@ class Choreographer:
         # tracing_gap, but agents calling open_pr twice should get the
         # existing PR's i_am_done hint, not a misleading "open a PR" remediate.
         if t.pr_number is not None and t.assigned_to == agent_id:
-            return Envelope.ok(
-                status=str(t.status),
-                task_id=str(task_id),
-                next=(
-                    f"PR #{t.pr_number} already open; call "
-                    f"i_am_done(task_id, notes='...') when self-verified"
-                ),
-                context_briefing=briefing,
-            ).with_introspection(task=t, role=role_str)
-        spec_ctx = spec_module.Context(
-            actor_id=agent_id,
-            actor_slug=getattr(agent, "slug", None) if agent is not None else None,
-            agent_team=str(agent.team) if agent is not None and agent.team else None,
-            original_developer_slug=_extract_original_developer(t),
-        )
+            return _pr_already_open_envelope(t, briefing, role_str)
+        spec_ctx = _spec_context(agent_id, agent, t)
         if rejection := await self._open_pr_preflight_rejection(
             agent_id=agent_id,
             task_id=task_id,
@@ -2670,14 +2682,9 @@ class Choreographer:
         unchanged work returns the existing artifact.
         """
         role_str = str(agent.role) if agent is not None else "developer"
-        spec_ctx = spec_module.Context(
-            actor_id=agent_id,
-            actor_slug=getattr(agent, "slug", None) if agent is not None else None,
-            agent_team=str(agent.team) if agent is not None and agent.team else None,
-            original_developer_slug=_extract_original_developer(t),
-        )
+        spec_ctx = _spec_context(agent_id, agent, t)
         rejection = await self._open_local_review_preflight(
-            agent_id, task_id, t, role_str, briefing, spec_ctx
+            t, role_str, briefing, spec_ctx
         )
         if rejection is None:
             rejection = await self._capture_review_artifact(
@@ -2709,8 +2716,6 @@ class Choreographer:
 
     async def _open_local_review_preflight(
         self,
-        agent_id: UUID,
-        task_id: UUID,
         t: Any,
         role_str: str,
         briefing: dict[str, Any],
@@ -9394,38 +9399,46 @@ class Choreographer:
         # target on GitHub, skip the GitHub merge call — a re-issue after
         # a None-complete would otherwise 405 on the already-merged PR and
         # respawn the PM forever against a remediate hint that can't succeed.
-        merge_commit: str | None = None
-        if t.pr_number:
-            already_merged = await self.git.is_pr_merged_for_task(task_id)
-            if not already_merged:
-                try:
-                    merge_result = await self.git.pr_merge(
-                        t.pr_number,
-                        target=target,
-                        project_id=cast("UUID", t.project_id),
-                        actor_agent_id=pm_agent_id,
-                    )
-                    merge_commit = merge_result.get("merge_commit_sha")
-                except MergeConflictError as exc:
-                    # A sibling landed overlapping work first, so this PR can't
-                    # merge. Resolve it (rebase / close-superseded / escalate)
-                    # instead of letting the failure re-block the task and
-                    # respawn the PM forever.
-                    return await self._resolve_merge_conflict_on_complete(
-                        pm_agent_id=pm_agent_id,
-                        task_id=task_id,
-                        t=t,
-                        target=target,
-                        notes=notes,
-                        exc=exc,
-                    )
-                except UnauthorizedError as exc:
-                    return await self._handle_ceo_only_merge_refusal(
-                        exc, pm_agent_id, task_id, t, target
-                    )
+        merge_commit, refusal = await self._merge_cell_pr_into_target(
+            pm_agent_id, task_id, t, target, notes
+        )
+        if refusal is not None:
+            return refusal
         return await self._finalize_cell_complete(
             pm_agent_id, task_id, t, notes, merge_commit
         )
+
+    async def _merge_cell_pr_into_target(
+        self, pm_agent_id: UUID, task_id: UUID, t: Any, target: str, notes: str
+    ) -> tuple[str | None, Envelope | None]:
+        """Merge the task's PR unless already merged: ``(merge_commit, refusal)``."""
+        if not t.pr_number or await self.git.is_pr_merged_for_task(task_id):
+            return None, None
+        try:
+            merge_result = await self.git.pr_merge(
+                t.pr_number,
+                target=target,
+                project_id=cast("UUID", t.project_id),
+                actor_agent_id=pm_agent_id,
+            )
+        except MergeConflictError as exc:
+            # A sibling landed overlapping work first, so this PR can't
+            # merge. Resolve it (rebase / close-superseded / escalate)
+            # instead of letting the failure re-block the task and
+            # respawn the PM forever.
+            return None, await self._resolve_merge_conflict_on_complete(
+                pm_agent_id=pm_agent_id,
+                task_id=task_id,
+                t=t,
+                target=target,
+                notes=notes,
+                exc=exc,
+            )
+        except UnauthorizedError as exc:
+            return None, await self._handle_ceo_only_merge_refusal(
+                exc, pm_agent_id, task_id, t, target
+            )
+        return merge_result.get("merge_commit_sha"), None
 
     async def _accept_local_review_and_complete(
         self, pm_agent_id: UUID, task_id: UUID, t: Any, notes: str

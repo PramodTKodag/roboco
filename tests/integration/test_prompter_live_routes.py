@@ -986,7 +986,7 @@ async def test_relay_routes_refuse_every_other_role(
     client, registry = live_client["client"], live_client["registry"]
     registry.open("s1", "intake-1")
     other = httpx.AsyncClient(
-        transport=client._transport,  # noqa: SLF001 - same mounted app
+        transport=client._transport,
         base_url="http://test",
     )
     headers = {"X-Agent-ID": "intake-1", "X-Agent-Role": role}
@@ -1010,7 +1010,7 @@ async def test_relay_routes_refuse_every_other_role(
 async def test_relay_routes_refuse_an_anonymous_caller(live_client: dict) -> None:
     client = live_client["client"]
     live_client["registry"].open("s1", "intake-1")
-    other = httpx.AsyncClient(transport=client._transport, base_url="http://test")  # noqa: SLF001
+    other = httpx.AsyncClient(transport=client._transport, base_url="http://test")
     async with other:
         posted = await other.post(
             "/api/prompter/live/s1/events", json={"kind": "text", "text": "x"}

@@ -7,11 +7,11 @@ import json
 from pathlib import Path
 
 import pytest
-
 from roboco.runtime.subscription import cli_pin, service_main
 from roboco.runtime.subscription.cli_pin import CliBuildNotApproved, verify_cli_binary
 
 _REPO_ROOT = Path(__file__).parents[3]
+_REFUSED_EXIT_CODE = 2
 _SYNTHETIC_BINARY = b"synthetic cli build"
 
 
@@ -53,12 +53,14 @@ def test_the_service_does_not_start_on_an_unapproved_build(
 
     monkeypatch.setattr(service_main, "verify_cli_binary", refuse)
     monkeypatch.setattr(service_main.asyncio, "run", must_not_serve)
-    assert service_main.main() == 2
+    assert service_main.main() == _REFUSED_EXIT_CODE
 
 
 def test_the_egress_policy_matches_its_reviewed_digest() -> None:
     directory = _REPO_ROOT / "deploy" / "personal"
-    recorded = (directory / "egress-policy.sha256").read_text(encoding="utf-8").split()[0]
+    recorded = (
+        (directory / "egress-policy.sha256").read_text(encoding="utf-8").split()[0]
+    )
     policy = (directory / "egress-policy.json").read_bytes()
     assert hashlib.sha256(policy).hexdigest() == recorded
     assert json.loads(policy)["version"]

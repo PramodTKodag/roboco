@@ -32,7 +32,7 @@ from roboco.foundation.policy.subscription_policy import (  # noqa: F401 - re-ex
     classify_auth_status,
     classify_auth_status_text,
 )
-from roboco.runtime.subscription.cli_pin import (  # noqa: F401 - re-exported
+from roboco.runtime.subscription.cli_pin import (
     PINNED_BINARY_SHA256,
     PINNED_CLI_VERSION,
 )

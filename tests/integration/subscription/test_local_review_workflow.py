@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -31,7 +31,10 @@ from roboco.models.base import (
     TaskType,
     Team,
 )
-from roboco.runtime.subscription.project_executor import PatchOutcome
+from roboco.runtime.subscription.project_executor import (
+    PatchOutcome,
+    ProjectExecutionUnavailable,
+)
 from roboco.services.gateway.choreographer import Choreographer, ChoreographerDeps
 from roboco.services.gateway.quality_gate import GateResult
 from roboco.services.review_artifact import (
@@ -101,10 +104,6 @@ class FakeWorkspace:
     exports: int = field(default=0)
 
     async def export_patch(self) -> PatchOutcome:
-        from roboco.runtime.subscription.project_executor import (
-            ProjectExecutionUnavailable,
-        )
-
         if self.unavailable:
             raise ProjectExecutionUnavailable("worker_not_configured")
         self.exports += 1
@@ -129,6 +128,10 @@ class FakeExecutors:
         return self.workspace
 
 
+def _id(row: TaskTable) -> UUID:
+    return cast("UUID", row.id)
+
+
 @dataclass
 class LocalReviewHarness:
     c: Choreographer
@@ -141,6 +144,26 @@ class LocalReviewHarness:
     qa: AgentTable
     doc: AgentTable
     cell_pm: AgentTable
+
+    @property
+    def task_id(self) -> UUID:
+        return cast("UUID", self.task.id)
+
+    @property
+    def dev_id(self) -> UUID:
+        return cast("UUID", self.dev.id)
+
+    @property
+    def qa_id(self) -> UUID:
+        return cast("UUID", self.qa.id)
+
+    @property
+    def doc_id(self) -> UUID:
+        return cast("UUID", self.doc.id)
+
+    @property
+    def cell_pm_id(self) -> UUID:
+        return cast("UUID", self.cell_pm.id)
 
 
 def _agent(role: AgentRole, slug: str) -> AgentTable:
@@ -255,17 +278,17 @@ async def harness(
 
 async def _claim_and_work(h: LocalReviewHarness) -> None:
     env = await h.c.i_will_work_on(
-        agent_id=h.dev.id,
-        task_id=h.task.id,
+        agent_id=h.dev_id,
+        task_id=h.task_id,
         plan=_GOOD_PLAN,
         steps=_STEPS,
         technical_considerations=_GOOD_TC,
         risks=_GOOD_RISKS,
     )
     assert env.error is None, env.message
-    await h.task_service.add_progress(h.task.id, h.dev.id, "implemented /healthz")
+    await h.task_service.add_progress(h.task_id, h.dev_id, "implemented /healthz")
     await h.task_service.record_section_note(
-        h.task.id,
+        h.task_id,
         "developer",
         {"summary": "Implemented /healthz and added a test for the happy path."},
     )
@@ -273,19 +296,19 @@ async def _claim_and_work(h: LocalReviewHarness) -> None:
 
 async def _submit_to_qa(h: LocalReviewHarness) -> None:
     await _claim_and_work(h)
-    env = await h.c.open_pr(h.dev.id, h.task.id)
+    env = await h.c.open_pr(h.dev_id, h.task_id)
     assert env.error is None, env.message
-    env = await h.c.i_am_done(h.dev.id, h.task.id, "tests pass; route works")
+    env = await h.c.i_am_done(h.dev_id, h.task_id, "tests pass; route works")
     assert env.error is None, env.message
     assert env.status == "awaiting_qa"
 
 
 async def _qa_pass(h: LocalReviewHarness) -> None:
-    env = await h.c.claim_review(h.qa.id, h.task.id)
+    env = await h.c.claim_review(h.qa_id, h.task_id)
     assert env.error is None, env.message
     env = await h.c.pass_review(
-        h.qa.id,
-        h.task.id,
+        h.qa_id,
+        h.task_id,
         notes=(
             "Reviewed the local patch artifact end to end: the endpoint returns 200"
             " with a status field, and both acceptance criteria are met."
@@ -305,7 +328,7 @@ async def test_task_reaches_owner_review_without_touching_a_forge(
     h = harness
     await _submit_to_qa(h)
 
-    task = await h.task_service.get(h.task.id)
+    task = await h.task_service.get(h.task_id)
     assert task is not None
     assert task.review_workflow == "local_review"
     assert task.review_artifact_id is not None
@@ -318,22 +341,24 @@ async def test_task_reaches_owner_review_without_touching_a_forge(
     assert artifact.paths == ["app/health.py"]
 
     await _qa_pass(h)
-    env = await h.c.claim_doc_task(h.doc.id, h.task.id)
+    env = await h.c.claim_doc_task(h.doc_id, h.task_id)
     assert env.error is None, env.message
     env = await h.c.i_documented(
-        h.doc.id, h.task.id, notes="Documented /healthz in docs/api/health.md",
+        h.doc_id,
+        h.task_id,
+        notes="Documented /healthz in docs/api/health.md",
         files=["docs/api/health.md"],
     )
     assert env.error is None, env.message
     assert env.status == "awaiting_pm_review"
 
     env = await h.c.complete(
-        h.cell_pm.id, h.task.id, notes="Local patch reviewed by QA; accepting it."
+        h.cell_pm_id, h.task_id, notes="Local patch reviewed by QA; accepting it."
     )
     assert env.error is None, env.message
     assert env.status == "completed"
 
-    task = await h.task_service.get(h.task.id)
+    task = await h.task_service.get(h.task_id)
     assert task is not None
     artifact = await h.artifacts.current_for(task)
     assert artifact is not None
@@ -359,7 +384,7 @@ def _patch_for(path: str, line: str) -> str:
 
 
 async def _task_row(h: LocalReviewHarness) -> TaskTable:
-    task = await h.task_service.get(h.task.id)
+    task = await h.task_service.get(h.task_id)
     assert task is not None
     return task
 
@@ -382,12 +407,12 @@ async def test_unsafe_changes_are_never_captured(
     h.workspace.patch = patch
     await _claim_and_work(h)
 
-    env = await h.c.open_pr(h.dev.id, h.task.id)
+    env = await h.c.open_pr(h.dev_id, h.task_id)
 
     assert env.error == "invalid_state"
     assert reason in str(env.message)
     assert (await _task_row(h)).review_artifact_id is None
-    env = await h.c.i_am_done(h.dev.id, h.task.id, "tests pass; route works")
+    env = await h.c.i_am_done(h.dev_id, h.task_id, "tests pass; route works")
     assert env.error is not None
     assert (await _task_row(h)).status != TaskStatus.AWAITING_QA
 
@@ -399,7 +424,7 @@ async def test_truncated_export_is_refused_not_stored(
     h.workspace.truncated = True
     await _claim_and_work(h)
 
-    env = await h.c.open_pr(h.dev.id, h.task.id)
+    env = await h.c.open_pr(h.dev_id, h.task_id)
 
     assert env.error == "invalid_state"
     assert "patch_truncated" in str(env.message)
@@ -413,8 +438,8 @@ async def test_unavailable_worker_blocks_capture_and_submit(
     h.workspace.unavailable = True
     await _claim_and_work(h)
 
-    assert (await h.c.open_pr(h.dev.id, h.task.id)).error == "invalid_state"
-    assert (await h.c.i_am_done(h.dev.id, h.task.id, "done")).error is not None
+    assert (await h.c.open_pr(h.dev_id, h.task_id)).error == "invalid_state"
+    assert (await h.c.i_am_done(h.dev_id, h.task_id, "done")).error is not None
     assert (await _task_row(h)).status != TaskStatus.AWAITING_QA
 
 
@@ -424,9 +449,9 @@ async def test_failing_quality_checks_block_submit(
     h = harness
     h.git.quality_gate_passes = False
     await _claim_and_work(h)
-    assert (await h.c.open_pr(h.dev.id, h.task.id)).error is None
+    assert (await h.c.open_pr(h.dev_id, h.task_id)).error is None
 
-    env = await h.c.i_am_done(h.dev.id, h.task.id, "tests pass; route works")
+    env = await h.c.i_am_done(h.dev_id, h.task_id, "tests pass; route works")
 
     assert env.error is not None
     assert (await _task_row(h)).status != TaskStatus.AWAITING_QA
@@ -437,10 +462,10 @@ async def test_repeated_capture_keeps_one_artifact(
 ) -> None:
     h = harness
     await _claim_and_work(h)
-    assert (await h.c.open_pr(h.dev.id, h.task.id)).error is None
+    assert (await h.c.open_pr(h.dev_id, h.task_id)).error is None
     first = (await _task_row(h)).review_artifact_id
 
-    assert (await h.c.open_pr(h.dev.id, h.task.id)).error is None
+    assert (await h.c.open_pr(h.dev_id, h.task_id)).error is None
 
     assert (await _task_row(h)).review_artifact_id == first
 
@@ -451,11 +476,11 @@ async def test_qa_failure_then_new_work_supersedes_the_artifact(
     h = harness
     await _submit_to_qa(h)
     first = (await _task_row(h)).review_artifact_id
-    assert (await h.c.claim_review(h.qa.id, h.task.id)).error is None
+    assert (await h.c.claim_review(h.qa_id, h.task_id)).error is None
 
     env = await h.c.fail_review(
-        h.qa.id,
-        h.task.id,
+        h.qa_id,
+        h.task_id,
         findings=[
             {
                 "file": "app/health.py",
@@ -471,15 +496,15 @@ async def test_qa_failure_then_new_work_supersedes_the_artifact(
 
     h.workspace.patch = _patch_for("app/health.py", "def healthz() -> Health: ...")
     env = await h.c.i_will_work_on(
-        agent_id=h.dev.id,
-        task_id=h.task.id,
+        agent_id=h.dev_id,
+        task_id=h.task_id,
         plan=_GOOD_PLAN,
         steps=_STEPS,
         technical_considerations=_GOOD_TC,
         risks=_GOOD_RISKS,
     )
     assert env.error is None, env.message
-    assert (await h.c.open_pr(h.dev.id, h.task.id)).error is None
+    assert (await h.c.open_pr(h.dev_id, h.task_id)).error is None
 
     task = await _task_row(h)
     assert task.review_artifact_id != first
@@ -494,12 +519,12 @@ async def test_documentation_cannot_alter_the_reviewed_change(
     h = harness
     await _submit_to_qa(h)
     await _qa_pass(h)
-    assert (await h.c.claim_doc_task(h.doc.id, h.task.id)).error is None
+    assert (await h.c.claim_doc_task(h.doc_id, h.task_id)).error is None
     h.workspace.patch = _patch_for("app/health.py", "return tampered")
 
     env = await h.c.i_documented(
-        h.doc.id,
-        h.task.id,
+        h.doc_id,
+        h.task_id,
         notes="Documented /healthz in docs/api/health.md",
         files=["docs/api/health.md"],
     )
@@ -515,8 +540,8 @@ async def _seed_cell_and_root(h: LocalReviewHarness) -> tuple[TaskTable, TaskTab
     main_pm_id = await _seed_main_pm(session)
     root = await _seed_root_task(
         session,
-        project_id=h.task.project_id,
-        creator_id=h.task.created_by,
+        project_id=cast("UUID", h.task.project_id),
+        creator_id=cast("UUID", h.task.created_by),
         main_pm_id=main_pm_id,
     )
     root.branch_name = None
@@ -529,10 +554,10 @@ async def _seed_cell_and_root(h: LocalReviewHarness) -> tuple[TaskTable, TaskTab
         task_type=TaskType.PLANNING,
         nature=TaskNature.TECHNICAL,
         team=Team.BACKEND,
-        project_id=h.task.project_id,
+        project_id=cast("UUID", h.task.project_id),
         created_by=h.task.created_by,
-        assigned_to=h.cell_pm.id,
-        parent_task_id=root.id,
+        assigned_to=h.cell_pm_id,
+        parent_task_id=_id(root),
         acceptance_criteria=["The /healthz endpoint ships"],
     )
     session.add(cell)
@@ -549,40 +574,42 @@ async def test_cell_and_root_reach_owner_approval_without_a_pull_request(
     cell, root = await _seed_cell_and_root(h)
     await _submit_to_qa(h)
     await _qa_pass(h)
-    assert (await h.c.claim_doc_task(h.doc.id, h.task.id)).error is None
+    assert (await h.c.claim_doc_task(h.doc_id, h.task_id)).error is None
     env = await h.c.i_documented(
-        h.doc.id,
-        h.task.id,
+        h.doc_id,
+        h.task_id,
         notes="Documented /healthz in docs/api/health.md",
         files=["docs/api/health.md"],
     )
     assert env.error is None, env.message
-    env = await h.c.complete(h.cell_pm.id, h.task.id, notes="Leaf patch accepted.")
+    env = await h.c.complete(h.cell_pm_id, h.task_id, notes="Leaf patch accepted.")
     assert env.error is None, env.message
 
     env = await h.c.submit_up(
-        h.cell_pm.id,
-        cell.id,
+        h.cell_pm_id,
+        _id(cell),
         notes="Cell scope assembled: /healthz is implemented, reviewed and documented.",
     )
     assert env.error is None, env.message
     assert env.status == "awaiting_pm_review"
-    env = await h.c.complete(h.cell_pm.id, cell.id, notes="Cell scope accepted.")
+    env = await h.c.complete(h.cell_pm_id, _id(cell), notes="Cell scope accepted.")
     assert env.error is None, env.message
     assert env.status == "completed"
 
     env = await h.c.main_pm_complete(
         UUID(str(root.assigned_to)),
-        root.id,
+        _id(root),
         notes="Root scope complete; escalating to the owner for the final review.",
     )
     assert env.error is None, env.message
     assert env.status == "awaiting_ceo_approval"
 
-    approved = await h.task_service.ceo_approve(root.id, "Reviewed the exported patch.")
+    approved = await h.task_service.ceo_approve(
+        _id(root), "Reviewed the exported patch."
+    )
     assert approved is not None
     assert str(approved.status) == "completed"
-    for task_id in (h.task.id, cell.id, root.id):
+    for task_id in (h.task_id, _id(cell), _id(root)):
         row = await h.task_service.get(task_id)
         assert row is not None
         assert row.pr_number is None
@@ -597,22 +624,22 @@ async def test_owner_export_returns_verified_accepted_patches_only(
     cell, root = await _seed_cell_and_root(h)
     await _submit_to_qa(h)
     await _qa_pass(h)
-    assert (await h.c.claim_doc_task(h.doc.id, h.task.id)).error is None
+    assert (await h.c.claim_doc_task(h.doc_id, h.task_id)).error is None
     env = await h.c.i_documented(
-        h.doc.id,
-        h.task.id,
+        h.doc_id,
+        h.task_id,
         notes="Documented /healthz in docs/api/health.md",
         files=["docs/api/health.md"],
     )
     assert env.error is None, env.message
     session = h.task_service.session
 
-    assert await h.artifacts.accepted_series_under(root.id) == []
-    env = await h.c.complete(h.cell_pm.id, h.task.id, notes="Leaf patch accepted.")
+    assert await h.artifacts.accepted_series_under(_id(root)) == []
+    env = await h.c.complete(h.cell_pm_id, h.task_id, notes="Leaf patch accepted.")
     assert env.error is None, env.message
 
-    series = await h.artifacts.accepted_series_under(root.id)
-    assert [item.task_id for item in series] == [h.task.id]
+    series = await h.artifacts.accepted_series_under(_id(root))
+    assert [item.task_id for item in series] == [h.task_id]
     assert series[0].content.decode() == SYNTHETIC_PATCH
     assert series[0].sha256 == hashlib.sha256(SYNTHETIC_PATCH.encode()).hexdigest()
 
@@ -620,5 +647,5 @@ async def test_owner_export_returns_verified_accepted_patches_only(
     assert stored is not None
     stored.patch = stored.patch + "tampered\n"
     with pytest.raises(ReviewArtifactRefused, match="artifact_digest_mismatch"):
-        await h.artifacts.accepted_series_under(root.id)
-    assert cell.id != root.id
+        await h.artifacts.accepted_series_under(_id(root))
+    assert _id(cell) != _id(root)

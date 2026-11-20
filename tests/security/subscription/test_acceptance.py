@@ -12,7 +12,7 @@ import importlib.util
 import os
 import subprocess
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -23,9 +23,14 @@ from tests.integration.subscription.docker_support import (
 )
 from tests.security.subscription.acceptance_matrix import MATRIX, NOT_PROVEN_BY_CODE
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 TESTS = REPO_ROOT / "tests"
 STACK_PROJECT = "roboco-personal"
 REQUIRED_ROWS = 20
+BOOTSTRAP_REFUSED_EXIT_CODE = 2
+MIN_BOUNDARY_CHECKS = 20
 
 
 def _test_names(path: Path) -> set[str]:
@@ -61,15 +66,15 @@ def test_the_unproven_items_are_stated() -> None:
 
 
 def test_the_quickstart_script_refuses_to_start_the_legacy_stack() -> None:
-    result = subprocess.run(  # noqa: S603  # nosec B603
-        ["bash", str(REPO_ROOT / "scripts" / "bootstrap.sh")],  # noqa: S607
+    result = subprocess.run(  # nosec B603
+        ["bash", str(REPO_ROOT / "scripts" / "bootstrap.sh")],
         capture_output=True,
         text=True,
         check=False,
         timeout=30,
         env={"PATH": os.environ["PATH"]},
     )
-    assert result.returncode == 2
+    assert result.returncode == BOOTSTRAP_REFUSED_EXIT_CODE
     assert "make personal-up" in result.stderr
 
 
@@ -77,9 +82,12 @@ def _running_stack() -> bool:
     if docker_unavailable_reason() is not None:
         return False
     listing = docker(
-        "ps", "--filter", f"label=com.docker.compose.project={STACK_PROJECT}", "--quiet",
+        "ps",
+        "--filter",
+        f"label=com.docker.compose.project={STACK_PROJECT}",
+        "--quiet",
         check=False,
-    ).stdout  # fmt: skip
+    ).stdout
     return bool(listing.split())
 
 
@@ -107,4 +115,4 @@ def test_the_running_stack_passes_every_boundary_check() -> None:
     results = verifier.run_checks(STACK_PROJECT)  # type: ignore[attr-defined]
     failed = [(check.name, check.detail) for check in results if not check.passed]
     assert failed == []
-    assert len(results) >= 20
+    assert len(results) >= MIN_BOUNDARY_CHECKS

@@ -111,7 +111,9 @@ def _split_sections(patch: str) -> list[list[str]]:
 
 def _added_text(lines: list[str]) -> bytes:
     added = [
-        line[1:] for line in lines if line.startswith("+") and not line.startswith("+++")
+        line[1:]
+        for line in lines
+        if line.startswith("+") and not line.startswith("+++")
     ]
     return "\n".join(added).encode("utf-8", errors="replace")
 
@@ -127,7 +129,9 @@ def _is_documentation_path(path: str) -> bool:
 
 
 def _sections_by_path(patch: str) -> dict[str, str]:
-    return {_section_path(lines[0]): "\n".join(lines) for lines in _split_sections(patch)}
+    return {
+        _section_path(lines[0]): "\n".join(lines) for lines in _split_sections(patch)
+    }
 
 
 def added_documentation_paths(reviewed: str, candidate: str) -> tuple[str, ...]:
@@ -165,18 +169,13 @@ def inspect_patch(patch: str) -> PatchReport:
         if path in paths:
             raise PatchRefused("patch_duplicate_path", path)
         paths.append(path)
-        if not any(ln.startswith(_DELETED_FILE_MARKER) for ln in lines[1:]):
+        if not _deletes_file(lines):
             present.append(path)
         for line in lines[1:]:
             _refuse_unsafe_line(line)
-        added += sum(1 for ln in lines if ln.startswith("+") and not ln.startswith("+++"))
-        removed += sum(
-            1 for ln in lines if ln.startswith("-") and not ln.startswith("---")
-        )
-        suspected.extend(
-            f"{finding.path}:{finding.rule}"
-            for finding in scan_for_secrets(path, _added_text(lines))
-        )
+        added += _count_changed_lines(lines, "+", "+++")
+        removed += _count_changed_lines(lines, "-", "---")
+        suspected.extend(_secret_findings(path, lines))
     if suspected:
         raise PatchRefused("secrets_suspected", ",".join(sorted(suspected)))
     return PatchReport(
@@ -185,3 +184,18 @@ def inspect_patch(patch: str) -> PatchReport:
         added_lines=added,
         removed_lines=removed,
     )
+
+
+def _deletes_file(lines: list[str]) -> bool:
+    return any(ln.startswith(_DELETED_FILE_MARKER) for ln in lines[1:])
+
+
+def _count_changed_lines(lines: list[str], sign: str, header: str) -> int:
+    return sum(1 for ln in lines if ln.startswith(sign) and not ln.startswith(header))
+
+
+def _secret_findings(path: str, lines: list[str]) -> list[str]:
+    return [
+        f"{finding.path}:{finding.rule}"
+        for finding in scan_for_secrets(path, _added_text(lines))
+    ]

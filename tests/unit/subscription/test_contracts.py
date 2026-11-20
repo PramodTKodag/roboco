@@ -133,7 +133,6 @@ def test_result_usage_is_integer_counters_only() -> None:
 from roboco.runtime.subscription.contracts import (  # noqa: E402
     MAX_STREAM_BYTES,
     WorkerJob,
-    WorkerOperation,
     WorkerResult,
 )
 

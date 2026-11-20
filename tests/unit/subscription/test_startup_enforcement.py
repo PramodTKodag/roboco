@@ -59,7 +59,7 @@ async def test_persisted_forbidden_flag_row_is_never_applied(
     monkeypatch.setattr(settings, "research_enabled", settings.research_enabled)
     session: Any = object()
 
-    applied = await settings_service.apply_persisted_feature_flags(session)
+    await settings_service.apply_persisted_feature_flags(session)
     effective = await settings_service.feature_flag_effective_values(session)
 
     assert settings.token_factory_sandboxes_enabled is False

@@ -44,9 +44,8 @@ from roboco.foundation.policy import lifecycle as spec_module
 from roboco.foundation.policy import tracing as _tr
 from roboco.foundation.policy.content import markers
 from roboco.foundation.policy.review_workflow import is_local_review
-from roboco.runtime.subscription.project_executor import ProjectExecutionUnavailable
 from roboco.models.task import DocRef
-from roboco.services.review_artifact import ReviewArtifactRefused
+from roboco.runtime.subscription.project_executor import ProjectExecutionUnavailable
 from roboco.services.gateway.choreographer import findings as findings_lib
 from roboco.services.gateway.choreographer.evidence_legs import (
     LegBudget,
@@ -54,6 +53,7 @@ from roboco.services.gateway.choreographer.evidence_legs import (
 )
 from roboco.services.gateway.envelope import Envelope
 from roboco.services.gateway.evidence_builder import build_evidence_for_task
+from roboco.services.review_artifact import ReviewArtifactRefused
 from roboco.utils.converters import to_python_uuid
 
 logger = structlog.get_logger()
@@ -665,9 +665,7 @@ class DocMixin(_Base):
         branch.
         """
         if not is_local_review(task):
-            return await self._ensure_doc_branch_pushed(
-                doc_agent_id, task_id, briefing
-            )
+            return await self._ensure_doc_branch_pushed(doc_agent_id, task_id, briefing)
         try:
             await self.review_artifacts.capture_documentation(
                 task, agent_id=doc_agent_id

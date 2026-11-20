@@ -18,6 +18,7 @@ import ipaddress
 import json
 import re
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Any, Final, Literal
 
 POLICY_VERSION: Final[int] = 1
@@ -26,6 +27,8 @@ PROFILE_MAINTENANCE: Final[str] = "maintenance"
 _PROFILES: Final[tuple[str, ...]] = (PROFILE_NORMAL, PROFILE_MAINTENANCE)
 _ALLOWED_METHODS: Final[frozenset[str]] = frozenset({"GET", "POST"})
 _HTTPS_PORT: Final[int] = 443
+_MAX_PORT_DIGITS: Final[int] = 5
+_IPV4: Final[int] = 4
 _MAX_ENDPOINTS: Final[int] = 32
 _MAX_POLICY_BYTES: Final[int] = 64 * 1024
 ID_SEGMENT: Final[str] = "{id}"
@@ -127,6 +130,26 @@ def _parse_path(raw: object) -> tuple[str, ...]:
     return segments
 
 
+def _require_methods(methods: object) -> None:
+    if not (
+        isinstance(methods, list)
+        and methods
+        and set(methods) <= _ALLOWED_METHODS
+        and len(set(methods)) == len(methods)
+    ):
+        raise EgressPolicyInvalid("endpoint_methods_invalid")
+
+
+def _require_strings_matching(
+    values: object, pattern: re.Pattern[str], reason: str
+) -> None:
+    if not (
+        isinstance(values, list)
+        and all(isinstance(v, str) and pattern.fullmatch(v) for v in values)
+    ):
+        raise EgressPolicyInvalid(reason)
+
+
 def _parse_endpoint(raw: object) -> Endpoint:
     if not isinstance(raw, dict):
         raise EgressPolicyInvalid("endpoint_invalid")
@@ -141,23 +164,9 @@ def _parse_endpoint(raw: object) -> Endpoint:
     if port != _HTTPS_PORT:
         raise EgressPolicyInvalid("endpoint_port_invalid")
     methods, keys, types = raw["methods"], raw["query_keys"], raw["content_types"]
-    if not (
-        isinstance(methods, list)
-        and methods
-        and set(methods) <= _ALLOWED_METHODS
-        and len(set(methods)) == len(methods)
-    ):
-        raise EgressPolicyInvalid("endpoint_methods_invalid")
-    if not (
-        isinstance(keys, list)
-        and all(isinstance(k, str) and _QUERY_KEY.fullmatch(k) for k in keys)
-    ):
-        raise EgressPolicyInvalid("endpoint_query_invalid")
-    if not (
-        isinstance(types, list)
-        and all(isinstance(t, str) and _CONTENT_TYPE.fullmatch(t) for t in types)
-    ):
-        raise EgressPolicyInvalid("endpoint_content_types_invalid")
+    _require_methods(methods)
+    _require_strings_matching(keys, _QUERY_KEY, "endpoint_query_invalid")
+    _require_strings_matching(types, _CONTENT_TYPE, "endpoint_content_types_invalid")
     endpoint_id = raw["id"]
     if not isinstance(endpoint_id, str) or not _ENDPOINT_ID.fullmatch(endpoint_id):
         raise EgressPolicyInvalid("endpoint_id_invalid")
@@ -183,6 +192,26 @@ def _parse_profile(raw: object, *, name: str) -> tuple[Endpoint, ...]:
     return endpoints
 
 
+def _decode_policy_document(raw: bytes) -> dict[str, object]:
+    try:
+        document = json.loads(raw)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise EgressPolicyInvalid("policy_not_json") from exc
+    if not isinstance(document, dict):
+        raise EgressPolicyInvalid("policy_shape_invalid")
+    _require_keys(document, {"version", "profiles"}, "policy_fields_invalid")
+    if document["version"] != POLICY_VERSION:
+        raise EgressPolicyInvalid("policy_version_unsupported")
+    return document
+
+
+def _policy_profiles(document: dict[str, object]) -> dict[str, object]:
+    profiles = document["profiles"]
+    if not isinstance(profiles, dict) or set(profiles) != set(_PROFILES):
+        raise EgressPolicyInvalid("policy_profiles_invalid")
+    return profiles
+
+
 def load_policy(raw: bytes, *, expected_sha256: str) -> EgressPolicy:
     """Parse and validate the policy bytes against the reviewed digest.
 
@@ -194,18 +223,7 @@ def load_policy(raw: bytes, *, expected_sha256: str) -> EgressPolicy:
     digest = policy_sha256(raw)
     if not expected_sha256 or digest != expected_sha256.lower():
         raise EgressPolicyInvalid("policy_digest_mismatch")
-    try:
-        document = json.loads(raw)
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise EgressPolicyInvalid("policy_not_json") from exc
-    if not isinstance(document, dict):
-        raise EgressPolicyInvalid("policy_shape_invalid")
-    _require_keys(document, {"version", "profiles"}, "policy_fields_invalid")
-    if document["version"] != POLICY_VERSION:
-        raise EgressPolicyInvalid("policy_version_unsupported")
-    profiles = document["profiles"]
-    if not isinstance(profiles, dict) or set(profiles) != set(_PROFILES):
-        raise EgressPolicyInvalid("policy_profiles_invalid")
+    profiles = _policy_profiles(_decode_policy_document(raw))
     return EgressPolicy(
         sha256=digest,
         profiles={
@@ -243,7 +261,7 @@ def split_authority(authority: str) -> tuple[str, int] | None:
     host, sep, port = authority.partition(":")
     if not sep:
         return host, _HTTPS_PORT
-    if not port.isdigit() or len(port) > 5 or port != str(int(port)):
+    if not port.isdigit() or len(port) > _MAX_PORT_DIGITS or port != str(int(port)):
         return None
     return host, int(port)
 
@@ -308,25 +326,32 @@ def _authority_decision(request: EgressRequest) -> Decision | None:
     header = split_authority(request.host_header)
     if header is None:
         return _deny("authority_invalid")
-    if (
-        request.sni != host
-        or header[0] != host
-        or header[1] != request.connect_port
-    ):
+    if request.sni != host or header[0] != host or header[1] != request.connect_port:
         return _deny("authority_mismatch")
     if request.upgrade:
         return _deny("upgrade_not_allowed")
     return None
 
 
-def decide_request(
+def _endpoint_refusal(
+    endpoint: Endpoint, request: EgressRequest, query: dict[str, str]
+) -> Decision | None:
+    if request.method not in endpoint.methods:
+        return _deny("method_not_allowed")
+    if not _query_allowed(endpoint, query):
+        return _deny("query_not_allowed")
+    if request.method == "POST" and (
+        request.content_type is None
+        or request.content_type.split(";")[0].strip().lower()
+        not in endpoint.content_types
+    ):
+        return _deny("content_type_not_allowed")
+    return None
+
+
+def _match_endpoint(
     policy: EgressPolicy, profile: str, request: EgressRequest
 ) -> Decision:
-    """Allow a request only when it matches one endpoint of the profile exactly."""
-    if (refused := _authority_decision(request)) is not None:
-        return refused
-    if request.connect_port != _HTTPS_PORT:
-        return _deny("port_not_allowed")
     candidates = [
         endpoint
         for endpoint in policy.endpoints(profile)
@@ -341,23 +366,27 @@ def decide_request(
     for endpoint in candidates:
         if not _path_matches(endpoint.path, path):
             continue
-        if request.method not in endpoint.methods:
-            return _deny("method_not_allowed")
-        if not _query_allowed(endpoint, query):
-            return _deny("query_not_allowed")
-        if request.method == "POST" and (
-            request.content_type is None
-            or request.content_type.split(";")[0].strip().lower()
-            not in endpoint.content_types
-        ):
-            return _deny("content_type_not_allowed")
+        refusal = _endpoint_refusal(endpoint, request, query)
+        if refusal is not None:
+            return refusal
         return Decision("allow", "request_allowed", endpoint.endpoint_id)
     return _deny("path_not_allowed")
 
 
+def decide_request(
+    policy: EgressPolicy, profile: str, request: EgressRequest
+) -> Decision:
+    """Allow a request only when it matches one endpoint of the profile exactly."""
+    if (refused := _authority_decision(request)) is not None:
+        return refused
+    if request.connect_port != _HTTPS_PORT:
+        return _deny("port_not_allowed")
+    return _match_endpoint(policy, profile, request)
+
+
 def decide_response(status: int, *, has_location: bool) -> Decision:
     """Redirects are never followed: the CLI needs none on an approved endpoint."""
-    if 300 <= status < 400 or has_location:
+    if HTTPStatus.MULTIPLE_CHOICES <= status < HTTPStatus.BAD_REQUEST or has_location:
         return _deny("redirect_blocked")
     return Decision("allow", "response_allowed")
 
@@ -380,7 +409,7 @@ def pin_address(resolved: list[str]) -> str:
             address = ipaddress.ip_address(text)
         except ValueError:
             continue
-        if address.version == 4 and address.is_global and not address.is_multicast:
+        if address.version == _IPV4 and address.is_global and not address.is_multicast:
             permitted.append(str(address))
     if not permitted or len(permitted) != len(resolved):
         raise NoPermittedAddress

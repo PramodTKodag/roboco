@@ -1033,7 +1033,8 @@ def _p_no_pr_yet(task: Any, _agent: Any, _ctx: Any) -> bool:
 def _p_changes_captured(task: Any, _agent: Any, _ctx: Any) -> bool:
     """A local review task is submittable only once its patch artifact exists."""
     return (
-        not is_local_review(task) or getattr(task, "review_artifact_id", None) is not None
+        not is_local_review(task)
+        or getattr(task, "review_artifact_id", None) is not None
     )
 
 

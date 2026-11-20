@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
+from http import HTTPStatus
+from typing import TYPE_CHECKING, Any
 
 import pytest
-
 from roboco.api.access_guard import LocalAccessGuardMiddleware
 from roboco.api.auth.backend import SESSION_COOKIE_NAME
+
+if TYPE_CHECKING:
+    from collections.abc import MutableMapping
 
 ORIGIN = "http://localhost:3000"
 HOST = "localhost:3000"
@@ -17,16 +20,16 @@ COOKIE = f"{SESSION_COOKIE_NAME}=synthetic-session-value"
 class _Recorder:
     def __init__(self) -> None:
         self.reached = False
-        self.sent: list[dict[str, Any]] = []
+        self.sent: list[MutableMapping[str, Any]] = []
 
-    async def app(self, scope: Any, receive: Any, send: Any) -> None:
+    async def app(self, *_asgi_args: Any) -> None:
         self.reached = True
 
-    async def send(self, message: dict[str, Any]) -> None:
+    async def send(self, message: MutableMapping[str, Any]) -> None:
         self.sent.append(message)
 
 
-async def _receive() -> dict[str, Any]:
+async def _receive() -> MutableMapping[str, Any]:
     return {"type": "http.request"}
 
 
@@ -61,12 +64,13 @@ def _status(recorder: _Recorder) -> int:
 
 
 @pytest.mark.parametrize(
-    "host", ["evil.example", "localhost", "localhost:3001", "localhost:3000.evil.test", ""]
+    "host",
+    ["evil.example", "localhost", "localhost:3001", "localhost:3000.evil.test", ""],
 )
 async def test_an_unlisted_host_is_refused(host: str) -> None:
     recorder = await _run(_scope(headers={"host": host}))
     assert not recorder.reached
-    assert _status(recorder) == 400
+    assert _status(recorder) == HTTPStatus.BAD_REQUEST
 
 
 async def test_a_listed_internal_host_is_served_without_a_cookie() -> None:
@@ -82,7 +86,8 @@ async def test_a_state_change_with_the_session_cookie_needs_an_allowed_origin() 
 
 
 @pytest.mark.parametrize(
-    "origin", [None, "null", "http://evil.example", "http://localhost:5174", ORIGIN + ".evil"]
+    "origin",
+    [None, "null", "http://evil.example", "http://localhost:5174", ORIGIN + ".evil"],
 )
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
 async def test_a_cross_origin_state_change_with_the_cookie_is_refused(
@@ -93,7 +98,7 @@ async def test_a_cross_origin_state_change_with_the_cookie_is_refused(
         headers["origin"] = origin
     recorder = await _run(_scope(method=method, headers=headers))
     assert not recorder.reached
-    assert _status(recorder) == 403
+    assert _status(recorder) == HTTPStatus.FORBIDDEN
 
 
 async def test_a_state_change_without_the_cookie_is_not_a_browser_session() -> None:
@@ -114,7 +119,9 @@ async def test_an_unrelated_cookie_does_not_trigger_the_origin_rule() -> None:
 
 
 async def test_a_websocket_with_the_cookie_needs_an_allowed_origin() -> None:
-    allowed = await _run(_scope("websocket", headers={"cookie": COOKIE, "origin": ORIGIN}))
+    allowed = await _run(
+        _scope("websocket", headers={"cookie": COOKIE, "origin": ORIGIN})
+    )
     assert allowed.reached
     foreign = await _run(
         _scope("websocket", headers={"cookie": COOKIE, "origin": "http://evil.example"})
@@ -131,7 +138,9 @@ async def test_a_websocket_to_an_unlisted_host_is_closed() -> None:
 
 async def test_refusals_do_not_echo_request_content() -> None:
     recorder = await _run(
-        _scope(method="POST", headers={"cookie": COOKIE, "origin": "http://evil.example"})
+        _scope(
+            method="POST", headers={"cookie": COOKIE, "origin": "http://evil.example"}
+        )
     )
     body = recorder.sent[1]["body"].decode()
     assert "synthetic-session-value" not in body

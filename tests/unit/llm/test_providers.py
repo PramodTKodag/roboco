@@ -29,7 +29,6 @@ from roboco.llm.providers import (
 )
 from roboco.models.base import ModelProvider
 from roboco.models.runtime import OrchestratorAgentConfig
-from roboco.seeds.initial_data import AGENT_UUIDS
 
 
 @pytest.fixture(autouse=True)

@@ -134,7 +134,9 @@ async def get_ollama_key_status(
     )
 
 
-@router.put("/ollama-key", response_model=OllamaKeyStatus,
+@router.put(
+    "/ollama-key",
+    response_model=OllamaKeyStatus,
     dependencies=[Depends(refuse_forbidden_integration_writes)],
 )
 @guard_deco.rate_limit(requests=10, window=60)
@@ -193,7 +195,9 @@ async def get_grok_key_status(
     )
 
 
-@router.put("/grok-key", response_model=GrokKeyStatus,
+@router.put(
+    "/grok-key",
+    response_model=GrokKeyStatus,
     dependencies=[Depends(refuse_forbidden_integration_writes)],
 )
 @guard_deco.rate_limit(requests=10, window=60)
@@ -251,7 +255,9 @@ async def get_zai_key_status(
     )
 
 
-@router.put("/zai-key", response_model=ZaiKeyStatus,
+@router.put(
+    "/zai-key",
+    response_model=ZaiKeyStatus,
     dependencies=[Depends(refuse_forbidden_integration_writes)],
 )
 @guard_deco.rate_limit(requests=10, window=60)
@@ -313,7 +319,9 @@ async def get_nebius_key_status(
     )
 
 
-@router.put("/nebius-key", response_model=NebiusKeyStatus,
+@router.put(
+    "/nebius-key",
+    response_model=NebiusKeyStatus,
     dependencies=[Depends(refuse_forbidden_integration_writes)],
 )
 @guard_deco.rate_limit(requests=10, window=60)
@@ -351,7 +359,9 @@ async def set_nebius_key(
 # =============================================================================
 
 
-@router.get("/nebius/models", response_model=list[ProviderModelEntry],
+@router.get(
+    "/nebius/models",
+    response_model=list[ProviderModelEntry],
     dependencies=[Depends(refuse_forbidden_integration)],
 )
 async def get_nebius_models(
@@ -450,7 +460,9 @@ async def get_self_hosted_config(
     )
 
 
-@router.put("/self-hosted", response_model=SelfHostedConfigResponse,
+@router.put(
+    "/self-hosted",
+    response_model=SelfHostedConfigResponse,
     dependencies=[Depends(refuse_forbidden_integration_writes)],
 )
 @guard_deco.rate_limit(requests=10, window=60)
@@ -514,7 +526,9 @@ async def set_self_hosted_config(
     )
 
 
-@router.post("/self-hosted/test", response_model=SelfHostedTestResponse,
+@router.post(
+    "/self-hosted/test",
+    response_model=SelfHostedTestResponse,
     dependencies=[Depends(refuse_forbidden_integration_writes)],
 )
 async def test_self_hosted_connection(
@@ -550,7 +564,9 @@ async def test_self_hosted_connection(
     return SelfHostedTestResponse(ok=True, model_count=len(models))
 
 
-@router.get("/self-hosted/models", response_model=list[SelfHostedModelEntry],
+@router.get(
+    "/self-hosted/models",
+    response_model=list[SelfHostedModelEntry],
     dependencies=[Depends(refuse_forbidden_integration)],
 )
 async def get_self_hosted_models(

@@ -131,7 +131,7 @@ Submit work for QA. Auto-runs in_progress->verifying then verifying->awaiting_qa
 
 **Composes:** submit_verification → submit_qa
 
-**Preconditions:** commits>=1, owns_task
+**Preconditions:** changes_captured, commits>=1, owns_task
 
 
 ## i_am_idle

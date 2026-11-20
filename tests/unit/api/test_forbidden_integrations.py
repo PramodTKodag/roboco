@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from http import HTTPStatus
+
 import pytest
 from fastapi.testclient import TestClient
 from roboco.api.app import create_app
@@ -38,7 +40,7 @@ def test_state_changing_calls_are_refused(
     client: TestClient, method: str, path: str
 ) -> None:
     response = client.request(method, path, json={})
-    assert response.status_code == 403
+    assert response.status_code == HTTPStatus.FORBIDDEN
     assert "subscription-only policy" in response.json()["error"]["message"]
 
 
@@ -47,5 +49,5 @@ def test_outbound_or_active_content_routes_are_refused_even_for_reads(
     client: TestClient, path: str
 ) -> None:
     response = client.get(path)
-    assert response.status_code == 403
+    assert response.status_code == HTTPStatus.FORBIDDEN
     assert "subscription-only policy" in response.json()["error"]["message"]

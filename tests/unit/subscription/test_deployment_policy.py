@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 import yaml
-
 from roboco.foundation.policy.subscription_policy import (
     FORBIDDEN_ENV_NAMES,
     FORBIDDEN_ENV_PREFIXES,
@@ -25,6 +24,7 @@ _DOCKER_DIR = _REPO_ROOT / "docker"
 
 _LAUNCHER = "launcher"
 _CONTROLLERS = ("orchestrator", "dispatcher")
+_REFUSED_EXIT_CODE = 2
 _DOCKER_SOCKET = "/var/run/docker.sock"
 _EGRESS_POLICY_MODULE = "./roboco/runtime/subscription/egress_policy.py"
 _LOCALLY_BUILT_IMAGE = re.compile(r"^roboco-personal-[a-z-]+:\$\{ROBOCO_PERSONAL_TAG")
@@ -148,11 +148,10 @@ def test_no_host_credential_or_project_home_is_mounted(
                 name,
                 volume,
             )
-            allowed = (
-                source == _DOCKER_SOCKET
-                or source.startswith("./deploy/personal/")
-                or source == _EGRESS_POLICY_MODULE
-            )
+            allowed = source in (
+                _DOCKER_SOCKET,
+                _EGRESS_POLICY_MODULE,
+            ) or source.startswith("./deploy/personal/")
             assert allowed, (name, volume)
             assert source == _DOCKER_SOCKET or str(volume).endswith(":ro"), (
                 name,
@@ -345,8 +344,8 @@ def test_the_refusal_entrypoint_exits_non_zero_with_the_message() -> None:
         (_REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     )
     entrypoint = legacy["services"]["orchestrator-blue"]["entrypoint"]
-    result = subprocess.run(  # noqa: S603  # nosec B603
+    result = subprocess.run(  # nosec B603
         entrypoint, capture_output=True, text=True, check=False, timeout=10
     )
-    assert result.returncode == 2
+    assert result.returncode == _REFUSED_EXIT_CODE
     assert "make personal-up" in result.stderr

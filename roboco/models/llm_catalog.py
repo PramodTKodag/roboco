@@ -119,7 +119,8 @@ MODEL_CATALOG: tuple[CatalogEntry, ...] = (
     # kept Nemotron out of the Mix-mode per-agent picker and the
     # complexity-override validator. No _PRICING rows exist (no grounded
     # published per-token rates yet), so the cost-tier comparator ranks
-    # these cheapest-tier (0.0) - the downgrade-only guard therefore does NOT order Nano < Super < Ultra.
+    # these cheapest-tier (0.0) - the downgrade-only guard therefore does NOT
+    # order Nano < Super < Ultra.
     CatalogEntry(
         "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
         ModelProvider.NEBIUS,

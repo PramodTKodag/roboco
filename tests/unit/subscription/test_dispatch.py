@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import pytest
@@ -13,8 +14,8 @@ from roboco.runtime.engines.subscription_dispatch import (
     ProjectBinding,
     SubscriptionNotConfigured,
     WorkspaceNotLinked,
-    build_run_launch,
     build_project_executor_provider,
+    build_run_launch,
     build_run_supervisor,
     read_token_file,
 )
@@ -39,6 +40,9 @@ from roboco.runtime.subscription.contracts import (
 )
 from roboco.services.gateway.role_config import get_role_config
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 PROJECT_ID = uuid4()
 WORKSPACE = uuid4()
 
@@ -54,6 +58,8 @@ class FakeClient:
         self.state = state
         self.specs: list[RunSpec] = []
         self.credentials: list[VerbCredentials | None] = []
+        self.manifests: list[ToolManifest | None] = []
+        self.session_ids: list[str | None] = []
         self.cancelled: list[UUID] = []
         self.release = asyncio.Event()
         self.release.set()
@@ -66,7 +72,9 @@ class FakeClient:
         session_id: str | None = None,
     ) -> RunResult:
         self.specs.append(spec)
+        self.manifests.append(manifest)
         self.credentials.append(verb_credentials)
+        self.session_ids.append(session_id)
         await self.release.wait()
         return RunResult(
             run_id=spec.run_id, state=self.state, text="", reason_code=None, usage={}
@@ -149,6 +157,7 @@ async def test_run_token_is_bound_to_this_run_and_agent() -> None:
     credentials = client.credentials[0]
     assert credentials is not None
     claims = verify_run_token(credentials.token)
+    assert claims is not None
     assert claims.run_id == handle
     assert claims.agent_id == str(launch.agent_id)
     assert credentials.token not in client.specs[0].prompt
@@ -213,7 +222,7 @@ async def test_a_run_without_a_workspace_never_touches_the_launcher() -> None:
 
 async def test_a_crashing_client_is_a_failed_run_not_a_fallback() -> None:
     class Crashing(FakeClient):
-        async def run(self, *args: object, **kwargs: object) -> RunResult:
+        async def run(self, *_args: object, **_kwargs: object) -> RunResult:
             raise RuntimeError("synthetic transport crash")
 
     registrar = FakeRegistrar()
@@ -255,7 +264,7 @@ def test_worker_tools_follow_role_write_access_and_workspace() -> None:
     assert {grant.server.value for grant in full.verb_grants} == {"flow", "do"}
 
 
-def test_token_files_fail_closed(tmp_path) -> None:
+def test_token_files_fail_closed(tmp_path: Path) -> None:
     with pytest.raises(SubscriptionNotConfigured):
         read_token_file("", what="x")
     with pytest.raises(SubscriptionNotConfigured):
@@ -273,7 +282,7 @@ def test_token_files_fail_closed(tmp_path) -> None:
     assert read_token_file(str(good), what="x") == "synthetic-token"
 
 
-def test_supervisor_is_not_built_without_a_service(tmp_path) -> None:
+def test_supervisor_is_not_built_without_a_service() -> None:
     unset = SimpleNamespace(claude_service_host="", launcher_host="")
     with pytest.raises(SubscriptionNotConfigured):
         build_run_supervisor(unset)  # type: ignore[arg-type]
@@ -287,7 +296,9 @@ def test_supervisor_is_not_built_without_a_service(tmp_path) -> None:
         build_run_supervisor(no_token)  # type: ignore[arg-type]
 
 
-def test_project_executor_provider_needs_a_launcher_and_both_tokens(tmp_path) -> None:
+def test_project_executor_provider_needs_a_launcher_and_both_tokens(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(SubscriptionNotConfigured):
         build_project_executor_provider(SimpleNamespace(launcher_host=""))  # type: ignore[arg-type]
     admin = tmp_path / "admin"
@@ -306,7 +317,7 @@ def test_project_executor_provider_needs_a_launcher_and_both_tokens(tmp_path) ->
     assert build_project_executor_provider(config) is not None  # type: ignore[arg-type]
 
 
-def _agent_config(tmp_path, agent_id: str = "be-dev-1") -> SimpleNamespace:
+def _agent_config(tmp_path: Path, agent_id: str = "be-dev-1") -> SimpleNamespace:
     blueprint = tmp_path / "blueprint.md"
     blueprint.write_text("blueprint text")
     return SimpleNamespace(
@@ -314,7 +325,7 @@ def _agent_config(tmp_path, agent_id: str = "be-dev-1") -> SimpleNamespace:
     )
 
 
-async def test_a_project_without_a_linked_workspace_is_refused(tmp_path) -> None:
+async def test_a_project_without_a_linked_workspace_is_refused(tmp_path: Path) -> None:
     config = _agent_config(tmp_path)
     with pytest.raises(WorkspaceNotLinked):
         await build_run_launch(
@@ -325,7 +336,7 @@ async def test_a_project_without_a_linked_workspace_is_refused(tmp_path) -> None
 
 
 async def test_a_linked_project_gets_worker_tools_and_a_composed_prompt(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     launch = await build_run_launch(
         _agent_config(tmp_path),  # type: ignore[arg-type]
@@ -337,7 +348,7 @@ async def test_a_linked_project_gets_worker_tools_and_a_composed_prompt(
     assert WorkerOperation.READ_FILE in launch.manifest.operations
 
 
-async def test_an_agent_without_identity_is_refused(tmp_path) -> None:
+async def test_an_agent_without_identity_is_refused(tmp_path: Path) -> None:
     with pytest.raises(SubscriptionNotConfigured):
         await build_run_launch(
             _agent_config(tmp_path, "nobody-1"),  # type: ignore[arg-type]

@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import pytest
-
-from roboco.runtime.subscription.contracts import WorkerJob, WorkerResult
 from roboco.runtime.subscription.launcher_client import LauncherRequestFailed
 from roboco.runtime.subscription.launcher_project_executors import (
     RUN_REUSE_SECONDS,
     LauncherProjectExecutorProvider,
 )
 from roboco.runtime.subscription.project_executor import ProjectExecutionUnavailable
+
+if TYPE_CHECKING:
+    from roboco.runtime.subscription.contracts import WorkerJob, WorkerResult
+
+_EXPECTED_RUNS_AFTER_REUSE_WINDOW = 2
 
 
 class FakeRegistration:
@@ -84,7 +88,7 @@ async def test_reuses_the_run_until_it_is_close_to_expiry() -> None:
     assert await provider.executor_for(project, uuid4()) is first
     clock.now += 2
     assert await provider.executor_for(project, uuid4()) is not first
-    assert len(registration.runs) == 2
+    assert len(registration.runs) == _EXPECTED_RUNS_AFTER_REUSE_WINDOW
 
 
 async def test_a_project_without_a_workspace_is_refused() -> None:

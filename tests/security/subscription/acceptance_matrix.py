@@ -142,6 +142,7 @@ MATRIX: dict[str, tuple[str, ...]] = {
 # claims more than was tested.
 NOT_PROVEN_BY_CODE = (
     "a controller, runtime or launcher restart in the middle of a real model job",
-    "project HTML or remote images in a real browser (only the response policy is checked)",
+    "project HTML or remote images in a real browser"
+    " (only the response policy is checked)",
     "a full run through the owner's live subscription login",
 )

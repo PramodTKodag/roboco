@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
 from uuid import UUID, uuid4
 
-from roboco.agents_config import issue_run_token
+from roboco.agents_config import RunTokenSubject, issue_run_token
 from roboco.foundation.policy.subscription_policy import ALLOWED_MODEL_IDS
 from roboco.runtime.subscription.contracts import (
     MAX_RUN_SECONDS,
@@ -214,10 +214,12 @@ class RunSupervisor:
             workspace_handle=launch.workspace_handle,
         )
         token = issue_run_token(
-            str(launch.agent_id),
-            launch.role,
-            launch.team,
-            str(run_id),
+            RunTokenSubject(
+                agent_id=str(launch.agent_id),
+                role=launch.role,
+                team=launch.team,
+                run_id=str(run_id),
+            ),
             ttl_seconds=MAX_RUN_SECONDS + _TOKEN_GRACE_SECONDS,
         )
         credentials = VerbCredentials(

@@ -983,6 +983,35 @@ class ContentActions:
                 return rej
         return None
 
+    @staticmethod
+    def _commit_input_refusal(caller_role: str, subject: str) -> Envelope | None:
+        """Role gate and commit-message validation for ``commit``."""
+        if caller_role not in _COMMIT_ALLOWED_ROLES:
+            return Envelope.not_authorized(
+                message=(
+                    f"role '{caller_role}' may not commit code; only"
+                    " developers and documenters write commits"
+                ),
+                remediate=(
+                    "PMs delegate code work via delegate(); board members"
+                    " do not write code. If you intended to record an"
+                    " observation, use note() instead."
+                ),
+                context_briefing={},
+            )
+        result = validate_commit_message(
+            subject,
+            min_chars=settings.commit_subject_min_chars,
+            banned_words=settings.commit_banned_words,
+        )
+        if not result.ok:
+            return Envelope.invalid_state(
+                message=result.reason or "commit message invalid",
+                remediate=result.remediate or "",
+                context_briefing={},
+            )
+        return None
+
     async def commit(
         self,
         *,
@@ -997,31 +1026,9 @@ class ContentActions:
         """
         agent = await self.task.agent_for(agent_id)
         caller_role = str(agent.role) if agent is not None else ""
-        if caller_role not in _COMMIT_ALLOWED_ROLES:
-            return Envelope.not_authorized(
-                message=(
-                    f"role '{caller_role}' may not commit code; only"
-                    " developers and documenters write commits"
-                ),
-                remediate=(
-                    "PMs delegate code work via delegate(); board members"
-                    " do not write code. If you intended to record an"
-                    " observation, use note() instead."
-                ),
-                context_briefing={},
-            )
         subject = _strip_task_prefix(_strip_ai_attribution(message)).strip()
-        result = validate_commit_message(
-            subject,
-            min_chars=settings.commit_subject_min_chars,
-            banned_words=settings.commit_banned_words,
-        )
-        if not result.ok:
-            return Envelope.invalid_state(
-                message=result.reason or "commit message invalid",
-                remediate=result.remediate or "",
-                context_briefing={},
-            )
+        if refusal := self._commit_input_refusal(caller_role, subject):
+            return refusal
         t = await self.task.get_active_task_for_agent(agent_id)
         if t is None:
             return Envelope.invalid_state(
@@ -1034,8 +1041,7 @@ class ContentActions:
         if is_local_review(t):
             return Envelope.invalid_state(
                 message=(
-                    "this task uses local review: changes are not committed to"
-                    " a branch"
+                    "this task uses local review: changes are not committed to a branch"
                 ),
                 remediate=(
                     "write files with the workspace tools, then call open_pr()"

@@ -23,8 +23,9 @@ _BASE_URL = "http://localhost:11434"
 
 
 @pytest.fixture
-def _probe_unlocked(direct_model_clients_on: None) -> None:
+def _probe_unlocked(request: pytest.FixtureRequest) -> None:
     """The probe only runs once the direct-client policy lock is lifted."""
+    request.getfixturevalue("direct_model_clients_on")
 
 
 @pytest.mark.asyncio

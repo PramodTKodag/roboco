@@ -5,7 +5,7 @@ Provides CRUD operations and git workflow management for projects.
 Projects represent git repositories that agents work on.
 """
 
-from typing import ClassVar
+from typing import Any, ClassVar
 from typing import cast as typing_cast
 from uuid import UUID
 
@@ -492,7 +492,7 @@ class ProjectService(BaseService):
         project = await self.get(project_id)
         if not project:
             return None
-        project.offline_workspace_handle = handle
+        project.offline_workspace_handle = typing_cast("Any", handle)
         await self.session.flush()
         self.log.info("Offline workspace linked", project_id=str(project_id))
         return project
@@ -500,7 +500,9 @@ class ProjectService(BaseService):
     async def get_offline_workspace_handle(self, project_id: UUID) -> UUID | None:
         """The project's offline workspace handle, or None if none is linked."""
         project = await self.get(project_id)
-        return project.offline_workspace_handle if project else None
+        if not project:
+            return None
+        return typing_cast("UUID | None", project.offline_workspace_handle)
 
     async def set_workspace_path(
         self,

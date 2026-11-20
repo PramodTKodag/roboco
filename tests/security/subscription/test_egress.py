@@ -147,7 +147,15 @@ def test_other_hosts_and_misleading_suffixes_are_denied(
 
 @pytest.mark.parametrize(
     "host",
-    ["127.0.0.1", "169.254.169.254", "10.0.0.5", "[::1]", "::1", "2130706433", "0x7f.1"],
+    [
+        "127.0.0.1",
+        "169.254.169.254",
+        "10.0.0.5",
+        "[::1]",
+        "::1",
+        "2130706433",
+        "0x7f.1",
+    ],
 )
 def test_ip_literals_and_numeric_shorthands_are_denied(
     policy: EgressPolicy, host: str
@@ -271,9 +279,7 @@ def test_a_public_ipv4_answer_is_pinned() -> None:
         (b"x" * 70_000, "policy_empty_or_oversized"),
     ],
 )
-def test_empty_or_oversized_policy_files_block_startup(
-    raw: bytes, reason: str
-) -> None:
+def test_empty_or_oversized_policy_files_block_startup(raw: bytes, reason: str) -> None:
     with pytest.raises(EgressPolicyInvalid) as raised:
         load_policy(raw, expected_sha256=policy_sha256(raw))
     assert raised.value.reason_code == reason

@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import textwrap
 import time
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -69,7 +70,9 @@ _CLIENT_SCRIPT = textwrap.dedent(
 
     def through_proxy(name, host, method, target, host_header=None):
         try:
-            conn = http.client.HTTPSConnection(proxy, 8080, context=context, timeout=15)
+            conn = http.client.HTTPSConnection(
+                proxy, 8080, context=context, timeout=15
+            )
             conn.set_tunnel(host, 443)
             conn.putrequest(method, target, skip_host=True)
             conn.putheader("Host", host_header or host)
@@ -83,18 +86,23 @@ _CLIENT_SCRIPT = textwrap.dedent(
         except OSError as exc:
             results[name] = ["error", type(exc).__name__ + ": " + str(exc)[:80]]
 
-    through_proxy("telemetry", "api.anthropic.com", "POST", "/api/event_logging/v2/batch")
-    through_proxy("settings", "api.anthropic.com", "GET", "/api/claude_code/settings")
-    through_proxy("wrong_method", "api.anthropic.com", "GET", "/v1/messages?beta=true")
-    through_proxy("other_host", "evil.example", "POST", "/v1/messages?beta=true")
-    through_proxy("ip_literal", "93.184.216.34", "POST", "/v1/messages?beta=true")
+    api = "api.anthropic.com"
+    messages = "/v1/messages?beta=true"
+    through_proxy("telemetry", api, "POST", "/api/event_logging/v2/batch")
+    through_proxy("settings", api, "GET", "/api/claude_code/settings")
+    through_proxy("wrong_method", api, "GET", messages)
+    through_proxy("other_host", "evil.example", "POST", messages)
+    through_proxy("ip_literal", "93.184.216.34", "POST", messages)
     through_proxy(
-        "authority_mismatch", "api.anthropic.com", "POST", "/v1/messages?beta=true",
-        host_header="evil.example",
+        "authority_mismatch", api, "POST", messages, host_header="evil.example"
     )
-    through_proxy("approved_shape", "api.anthropic.com", "POST", "/v1/messages?beta=true")
+    through_proxy("approved_shape", api, "POST", messages)
 
-    for name, address in (("direct_ip", ("1.1.1.1", 443)), ("direct_name", ("example.com", 443))):
+    direct_targets = (
+        ("direct_ip", ("1.1.1.1", 443)),
+        ("direct_name", ("example.com", 443)),
+    )
+    for name, address in direct_targets:
         try:
             socket.create_connection(address, timeout=5).close()
             results[name] = "connected"
@@ -130,26 +138,43 @@ class ProxyStack:
     ) -> Any:
         args = [
             "run",
-            "--name", self.proxy,
-            "--label", LABEL,
-            "--network", self.network,
-            "--user", "1000:1000",
-            "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges",
+            "--name",
+            self.proxy,
+            "--label",
+            LABEL,
+            "--network",
+            self.network,
+            "--user",
+            "1000:1000",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
             "--read-only",
-            "--tmpfs", "/tmp",  # noqa: S108 - container-local scratch
-            "-v", f"{self.confdir}:/confdir",
-            "-v", f"{self.assets}:/opt/egress:ro",
-            "-v", f"{DEPLOY / 'proxy.yaml'}:/confdir/config.yaml:ro",
-            "-e", "ROBOCO_EGRESS_POLICY_PATH=/opt/egress/egress-policy.json",
-            "-e", f"ROBOCO_EGRESS_POLICY_SHA256={digest or self.digest}",
-            "-e", f"ROBOCO_EGRESS_PROFILE={profile}",
-            "-e", "PYTHONPATH=/opt/egress",
-            "-e", "PYTHONUNBUFFERED=1",
-            "--entrypoint", "mitmdump",
+            "--tmpfs",
+            "/tmp",
+            "-v",
+            f"{self.confdir}:/confdir",
+            "-v",
+            f"{self.assets}:/opt/egress:ro",
+            "-v",
+            f"{DEPLOY / 'proxy.yaml'}:/confdir/config.yaml:ro",
+            "-e",
+            "ROBOCO_EGRESS_POLICY_PATH=/opt/egress/egress-policy.json",
+            "-e",
+            f"ROBOCO_EGRESS_POLICY_SHA256={digest or self.digest}",
+            "-e",
+            f"ROBOCO_EGRESS_PROFILE={profile}",
+            "-e",
+            "PYTHONPATH=/opt/egress",
+            "-e",
+            "PYTHONUNBUFFERED=1",
+            "--entrypoint",
+            "mitmdump",
             *(["--detach"] if detach else []),
             PROXY_IMAGE,
-            "--set", "confdir=/confdir",
+            "--set",
+            "confdir=/confdir",
         ]
         return docker(*args, check=False)
 
@@ -172,7 +197,8 @@ class ProxyStack:
             CLIENT_IMAGE,
             "python", "-c", _CLIENT_SCRIPT, self.proxy, CANARY,
         )  # fmt: skip
-        return json.loads(result.stdout)
+        outcomes: dict[str, Any] = json.loads(result.stdout)
+        return outcomes
 
     def proxy_logs(self) -> str:
         logs = docker("logs", self.proxy, check=False)
@@ -201,7 +227,8 @@ def results(stack: ProxyStack) -> Iterator[dict[str, Any]]:
 
 
 def _body_error(entry: list[Any]) -> str:
-    return json.loads(entry[1])["error"]
+    error: str = json.loads(entry[1])["error"]
+    return error
 
 
 @pytest.mark.parametrize(
@@ -217,7 +244,7 @@ def test_denied_requests_get_a_policy_refusal(
     results: dict[str, Any], case: str, reason: str
 ) -> None:
     status, _ = results[case]
-    assert status == 403
+    assert status == HTTPStatus.FORBIDDEN
     assert _body_error(results[case]) == reason
 
 
@@ -259,7 +286,7 @@ def test_stopping_the_proxy_blocks_all_traffic(stack: ProxyStack) -> None:
     assert stack.start_proxy().returncode == 0
     stack.wait_until_ready()
     docker("stop", "--time", "2", stack.proxy)
-    outcome = subprocess.run(  # noqa: S603 - fixed argv, disposable test network
+    outcome = subprocess.run(
         ["docker", "run", "--rm", "--label", LABEL, "--network", stack.network,
          CLIENT_IMAGE, "python", "-c",
          "import socket,sys\n"

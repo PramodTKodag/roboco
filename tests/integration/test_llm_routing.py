@@ -647,7 +647,8 @@ async def test_apply_mode_mix_writes_overrides(llm_setup: dict) -> None:
 async def test_apply_mode_mix_pins_nebius_catalog_model(llm_setup: dict) -> None:
     """The live-verified Nemotron ids are catalog members, so a Mix-mode
     per-agent pin resolves to the NEBIUS provider row (auto-enabled) instead of
-    being rejected as an unknown model. This is the routing half of the Nebius levels-parity batch."""
+    being rejected as an unknown model. This is the routing half of the Nebius
+    levels-parity batch."""
     svc = llm_setup["svc"]
     await svc.apply_mode(
         mode="mix",

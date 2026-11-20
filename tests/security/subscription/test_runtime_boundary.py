@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -383,41 +384,63 @@ _CHAT_SERVER_VERBS = {
     ],
     "intake": ["search_past_tasks", "propose_draft", "propose_batch"],
 }
+
+
+@dataclass(frozen=True)
+class VerbCase:
+    """One granted verb: the run it is granted in and the route it may reach."""
+
+    purpose: str
+    role: str
+    server: str
+    verb: str
+    arguments: dict[str, Any]
+    route: str
+
+
 VERB_CASES = [
     pytest.param(
-        "delivery",
-        "developer",
-        "flow",
-        "i_am_idle",
-        {},
-        "/api/v1/flow/",
+        VerbCase(
+            purpose="delivery",
+            role="developer",
+            server="flow",
+            verb="i_am_idle",
+            arguments={},
+            route="/api/v1/flow/",
+        ),
         id="flow",
     ),
     pytest.param(
-        "delivery",
-        "developer",
-        "do",
-        "note",
-        {"text": "synthetic note"},
-        "/api/v1/do/",
+        VerbCase(
+            purpose="delivery",
+            role="developer",
+            server="do",
+            verb="note",
+            arguments={"text": "synthetic note"},
+            route="/api/v1/do/",
+        ),
         id="do",
     ),
     pytest.param(
-        "secretary",
-        "secretary",
-        "secretary",
-        "read_company_state",
-        {},
-        "/api/secretary/state",
+        VerbCase(
+            purpose="secretary",
+            role="secretary",
+            server="secretary",
+            verb="read_company_state",
+            arguments={},
+            route="/api/secretary/state",
+        ),
         id="secretary",
     ),
     pytest.param(
-        "intake",
-        "intake",
-        "intake",
-        "search_past_tasks",
-        {"query": "synthetic query"},
-        "/api/prompter/live/",
+        VerbCase(
+            purpose="intake",
+            role="intake",
+            server="intake",
+            verb="search_past_tasks",
+            arguments={"query": "synthetic query"},
+            route="/api/prompter/live/",
+        ),
         id="intake",
     ),
 ]
@@ -431,28 +454,23 @@ def _verb_tool(server: str, verb: str) -> str:
     return f"mcp__roboco_{server}__{verb}"
 
 
-@pytest.mark.parametrize(
-    ("purpose", "role", "server", "verb", "arguments", "route"), VERB_CASES
-)
+@pytest.mark.parametrize("case", VERB_CASES)
 def test_a_granted_verb_reaches_only_its_route_with_only_the_run_identity(
-    stack_factory: Any,
-    purpose: str,
-    role: str,
-    server: str,
-    verb: str,
-    arguments: dict[str, Any],
-    route: str,
+    stack_factory: Any, case: VerbCase
 ) -> None:
-    stack = stack_factory(FAKE_TOOL_CALL=_call(_verb_tool(server, verb), arguments))
+    server, verb = case.server, case.verb
+    stack = stack_factory(
+        FAKE_TOOL_CALL=_call(_verb_tool(server, verb), case.arguments)
+    )
     summary = stack.drive(
-        purpose=purpose,
-        role=role,
+        purpose=case.purpose,
+        role=case.role,
         operations=[],
         verbs=[{"server": server, "verbs": _granted(server, verb)}],
     )
     assert summary["state"] == "completed", summary
     (request,) = summary["api_requests"]
-    assert request["path"].startswith(route), request["path"]
+    assert request["path"].startswith(case.route), request["path"]
     assert set(request["header_names"]) <= _ALLOWED_API_HEADER_NAMES
     assert not request["sentinel_in_request"]
     if server != "intake":  # the intake relay is hardened separately (Task 11)

@@ -84,9 +84,7 @@ def test_unsafe_or_malformed_patches_are_refused(patch: str, reason: str) -> Non
 def test_binary_rename_mode_link_and_submodule_changes_are_refused(
     marker: str, reason: str
 ) -> None:
-    patch = _new_file("app/a.py", "a = 1").replace(
-        "new file mode 100644", marker, 1
-    )
+    patch = _new_file("app/a.py", "a = 1").replace("new file mode 100644", marker, 1)
     assert _reason(patch) == reason
 
 

@@ -64,7 +64,6 @@ async def _seed_claimed_task(
     assigned_to: UUID,
     active_claimant_id: UUID | None,
     plan: dict | None,
-    status: TaskStatus = TaskStatus.IN_PROGRESS,
     review_workflow: str = "local_review",
 ) -> UUID:
     """Seed a project + system creator + an in-progress task and return its id."""
@@ -103,7 +102,7 @@ async def _seed_claimed_task(
         title="Run-killer target task",
         description="Synthetic task for content-action run-killer tests.",
         acceptance_criteria=["content actions behave"],
-        status=status,
+        status=TaskStatus.IN_PROGRESS,
         priority=2,
         task_type=TaskType.CODE,
         nature=TaskNature.TECHNICAL,

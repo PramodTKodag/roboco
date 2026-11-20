@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 from roboco.agents_config import (
+    RunTokenSubject,
     issue_agent_token,
     issue_run_token,
     verify_agent_token,
@@ -31,16 +32,9 @@ def _auth_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ROBOCO_AGENT_AUTH_SECRET", "synthetic-signing-secret-for-tests")
 
 
-def _token(**overrides: Any) -> str:
-    values: dict[str, Any] = {
-        "agent_id": AGENT,
-        "role": ROLE,
-        "team": TEAM,
-        "run_id": RUN,
-        "ttl_seconds": TTL,
-    }
-    values.update(overrides)
-    return issue_run_token(**values)
+def _token(now: float | None = None) -> str:
+    subject = RunTokenSubject(agent_id=AGENT, role=ROLE, team=TEAM, run_id=RUN)
+    return issue_run_token(subject, ttl_seconds=TTL, now=now)
 
 
 # -- token ---------------------------------------------------------------
@@ -99,7 +93,7 @@ class Downstream:
     def __init__(self) -> None:
         self.scope: dict[str, Any] | None = None
 
-    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+    async def __call__(self, scope: Any, _receive: Any, send: Any) -> None:
         self.scope = scope
         await send({"type": "http.response.start", "status": 200, "headers": []})
         await send({"type": "http.response.body", "body": b"ok"})

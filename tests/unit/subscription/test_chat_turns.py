@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
+from roboco.mcp import intake_server, secretary_server
 from roboco.runtime.engines.chat_turns import (
     INTAKE_VERBS,
     MAX_TRANSCRIPT_BYTES,
@@ -16,7 +17,6 @@ from roboco.runtime.engines.chat_turns import (
     chat_manifest,
     compose_turn_prompt,
 )
-from roboco.runtime.engines.subscription_runs import RunLaunch
 from roboco.runtime.subscription.contracts import (
     RunResult,
     RunState,
@@ -24,6 +24,9 @@ from roboco.runtime.subscription.contracts import (
     WorkerOperation,
 )
 from roboco.services.prompter_live import PrompterLiveRegistry
+
+if TYPE_CHECKING:
+    from roboco.runtime.engines.subscription_runs import RunLaunch
 
 SESSION = "3f2a9c10aabbccdd"
 DRAFT_REPLY = (
@@ -36,6 +39,8 @@ class FakeSupervisor:
         self._results = list(results)
         self.launches: list[RunLaunch] = []
         self.cancelled: list[str] = []
+        self.polled: list[str] = []
+        self.forgotten: list[str] = []
         self._current: RunResult | None = None
 
     async def start(self, launch: RunLaunch) -> str:
@@ -44,24 +49,29 @@ class FakeSupervisor:
         return "run"
 
     async def result(self, agent_slug: str) -> RunResult | None:
+        self.polled.append(agent_slug)
         return self._current
 
     async def cancel(self, agent_slug: str) -> None:
         self.cancelled.append(agent_slug)
 
     def forget(self, agent_slug: str) -> None:
-        return None
+        self.forgotten.append(agent_slug)
 
 
 class FakePersistence:
     def __init__(self) -> None:
         self.drafts: list[dict[str, Any]] = []
         self.replies: list[str] = []
+        self.draft_sessions: list[str] = []
+        self.reply_sessions: list[str] = []
 
     async def record_draft(self, session_id: str, draft: dict[str, Any]) -> None:
+        self.draft_sessions.append(session_id)
         self.drafts.append(draft)
 
     async def record_reply(self, session_id: str, text: str) -> None:
+        self.reply_sessions.append(session_id)
         self.replies.append(text)
 
 
@@ -75,7 +85,7 @@ def _result(text: str = "Hello.", state: RunState = RunState.COMPLETED) -> RunRe
     )
 
 
-async def _model(role: str) -> str:
+async def _model(_role: str) -> str:
     return "claude-sonnet-5-5"
 
 
@@ -136,8 +146,6 @@ def test_secretary_manifest_has_its_verbs_and_no_files() -> None:
 
 
 async def test_granted_verbs_are_exactly_the_tools_the_servers_register() -> None:
-    from roboco.mcp import intake_server, secretary_server
-
     intake = {tool.name for tool in await intake_server.mcp.list_tools()}
     secretary = {tool.name for tool in await secretary_server.mcp.list_tools()}
     assert intake == set(INTAKE_VERBS)

@@ -10,15 +10,15 @@ from __future__ import annotations
 import re
 import subprocess
 import tarfile
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import pytest
-
 from roboco.runtime.subscription.cli_pin import (
     PINNED_BINARY_SHA256,
     PINNED_CLI_VERSION,
     sha256_of_file,
 )
+
 from tests.integration.subscription.docker_support import (
     REPO_ROOT,
     docker,
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
+_APPROVED_BUILD_MISMATCH_EXIT_CODE: Final = 2
 _SERVICES = ("controller", "launcher", "claude-service", "panel", "worker")
 _FORBIDDEN_FILE_NAMES = frozenset(
     {
@@ -99,8 +100,8 @@ def _export(image: str, destination: Path) -> Path:
     archive = destination / "image.tar"
     try:
         with archive.open("wb") as handle:
-            subprocess.run(  # noqa: S603
-                ["docker", "export", container],  # noqa: S607
+            subprocess.run(
+                ["docker", "export", container],
                 stdout=handle,
                 check=True,
                 timeout=300,
@@ -224,5 +225,5 @@ def test_unapproved_cli_contract_blocks(tmp_path: Path) -> None:
         image,
         check=False,
     )  # fmt: skip
-    assert result.returncode == 2
+    assert result.returncode == _APPROVED_BUILD_MISMATCH_EXIT_CODE
     assert "does not match approved build" in result.stderr + result.stdout

@@ -101,6 +101,7 @@ class SpawnLaunchEngine(_Base):
     # without a bare re-declaration directly on the concrete class.
     if TYPE_CHECKING:
         _provider_registry: ProviderRegistry | None
+        _run_supervisor: RunSupervisor | None
 
     async def _ensure_agent_image(self, agent_id: str | None = None) -> None:
         """Ensure the agent Docker images are present.

@@ -2528,7 +2528,8 @@ class Settings(BaseSettings):
             "ROBOCO_NEBIUS_CLI_MODEL"
         ),
     )
-    # Retry_after tunables for parking the NEBIUS provider (real Settings fields, not hardcoded module constants). The
+    # Retry_after tunables for parking the NEBIUS provider (real Settings
+    # fields, not hardcoded module constants). The
     # rate-limit value backs _park_nebius_rate_limited's exponential re-park
     # backoff (429 -> exit 75); the auth value covers the missing/invalid API
     # key preflight (401 -> exit 78).

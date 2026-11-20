@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-
 from roboco.runtime.subscription.service_main import (
     ServiceSettingsError,
     load_service_settings,
@@ -39,7 +38,9 @@ def test_valid_egress_route_is_loaded(base_env: dict[str, str]) -> None:
     assert settings.egress.ca_file == base_env["ROBOCO_EGRESS_CA_FILE"]
 
 
-@pytest.mark.parametrize("missing", ["ROBOCO_EGRESS_PROXY_URL", "ROBOCO_EGRESS_CA_FILE"])
+@pytest.mark.parametrize(
+    "missing", ["ROBOCO_EGRESS_PROXY_URL", "ROBOCO_EGRESS_CA_FILE"]
+)
 def test_a_missing_egress_setting_refuses_startup(
     base_env: dict[str, str], missing: str
 ) -> None:

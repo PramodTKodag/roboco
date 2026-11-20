@@ -4,11 +4,12 @@ Nebius Token Factory (https://tokenfactory.nebius.com) is Nebius's
 OpenAI-compatible inference API serving 60+ open models (NVIDIA Nemotron,
 DeepSeek, Qwen, Llama, ...) behind one metered API key speaking the OpenAI
 Chat Completions protocol at ``https://api.tokenfactory.nebius.com/v1``.
-RoboCo runs Nebius agents through the opencode CLI (``opencode run``): the orchestrator's
-shared container assembly mounts the RoboCo MCP gateway (``mcp-config.json``), the agent HMAC
-identity, and the git context; this provider adds the runtime env the
-opencode entrypoint reads (NEBIUS_API_KEY + NEBIUS_BASE_URL + the rendered
-opencode.json), then launches the ``roboco-agent-nebius`` image - whose
+RoboCo runs Nebius agents through the opencode CLI (``opencode run``): the
+orchestrator's shared container assembly mounts the RoboCo MCP gateway
+(``mcp-config.json``), the agent HMAC identity, and the git context; this
+provider adds the runtime env the opencode entrypoint reads (NEBIUS_API_KEY +
+NEBIUS_BASE_URL + the rendered opencode.json), then launches the
+``roboco-agent-nebius`` image - whose
 entrypoint renders the opencode config (see
 :mod:`roboco.llm.providers.nebius_cli_config`) and runs ``opencode run``
 headless.

@@ -9,6 +9,7 @@ from __future__ import annotations
 import http.client
 import json
 import time
+from http import HTTPStatus
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -87,20 +88,32 @@ def edge_port() -> Iterator[int]:
         edge = f"roboco-edge-nginx-{tag}"
         containers.append(edge)
         docker(
-            "run", "-d", "--rm", "--name", edge, "--network", network,
-            "-p", "127.0.0.1::80",
-            "-e", f"ROBOCO_PERSONAL_PORT={EDGE_PORT}",
-            "-e", "NGINX_ENVSUBST_FILTER=^ROBOCO_",
-            "-v", f"{PERSONAL / 'nginx.conf'}:/etc/nginx/templates/default.conf.template:ro",
-            "-v", f"{PERSONAL / 'nginx-proxy-common.conf'}:/etc/nginx/personal/nginx-proxy-common.conf:ro",
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            edge,
+            "--network",
+            network,
+            "-p",
+            "127.0.0.1::80",
+            "-e",
+            f"ROBOCO_PERSONAL_PORT={EDGE_PORT}",
+            "-e",
+            "NGINX_ENVSUBST_FILTER=^ROBOCO_",
+            "-v",
+            f"{PERSONAL / 'nginx.conf'}:/etc/nginx/templates/default.conf.template:ro",
+            "-v",
+            f"{PERSONAL / 'nginx-proxy-common.conf'}"
+            ":/etc/nginx/personal/nginx-proxy-common.conf:ro",
             NGINX_IMAGE,
-        )  # fmt: skip
+        )
         mapping = docker("port", edge, "80/tcp").stdout.split(":")[-1].strip()
         port = int(mapping)
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             try:
-                if _get(port, "/health").status == 200:
+                if _get(port, "/health").status == HTTPStatus.OK:
                     break
             except OSError:
                 pass
@@ -147,7 +160,10 @@ def test_routes_reach_the_expected_backend(edge_port: int) -> None:
 
 def test_other_hosts_are_refused(edge_port: int) -> None:
     for host in ("localhost:3001", "localhost", "127.0.0.1:8000"):
-        assert _get(edge_port, "/api/tasks", host=host).status == 421, host
+        assert (
+            _get(edge_port, "/api/tasks", host=host).status
+            == HTTPStatus.MISDIRECTED_REQUEST
+        ), host
     with pytest.raises(http.client.RemoteDisconnected):
         _get(edge_port, "/api/tasks", host="evil.example")
 

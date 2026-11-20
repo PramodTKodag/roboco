@@ -9,12 +9,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from cryptography.fernet import Fernet
 
 if TYPE_CHECKING:
     from types import ModuleType
 
 _SCRIPTS = Path(__file__).parents[3] / "scripts" / "personal"
 _SYNTHETIC_KEY = "synthetic-credential-value-not-real"
+_PRIVATE_DIRECTORY_MODE = 0o700
+_PRIVATE_FILE_MODE = 0o600
+_READ_ONLY_TOKEN_MODE = 0o444
+_MIN_TOKEN_LENGTH = 32
 
 
 @pytest.fixture(scope="module")
@@ -57,13 +62,13 @@ def test_state_is_private_complete_and_never_rotated(
 ) -> None:
     state = tmp_path / "state"
     stack.ensure_state(state)
-    assert _mode(state) == 0o700
-    assert _mode(state / "secrets.env") == 0o600
-    assert _mode(state / "panel-login.txt") == 0o600
+    assert _mode(state) == _PRIVATE_DIRECTORY_MODE
+    assert _mode(state / "secrets.env") == _PRIVATE_FILE_MODE
+    assert _mode(state / "panel-login.txt") == _PRIVATE_FILE_MODE
     for name in stack.TOKEN_NAMES:
         token = state / "secrets" / name
-        assert len(token.read_text(encoding="utf-8")) >= 32
-        assert _mode(token) == 0o444
+        assert len(token.read_text(encoding="utf-8")) >= _MIN_TOKEN_LENGTH
+        assert _mode(token) == _READ_ONLY_TOKEN_MODE
     values = stack._read_env_file(state / "secrets.env")
     assert set(values) == {
         "ROBOCO_DATABASE_PASSWORD",
@@ -82,8 +87,6 @@ def test_state_is_private_complete_and_never_rotated(
 def test_the_encryption_key_is_a_valid_fernet_key(
     stack: ModuleType, tmp_path: Path
 ) -> None:
-    from cryptography.fernet import Fernet
-
     stack.ensure_state(tmp_path / "state")
     key = stack._read_env_file(tmp_path / "state" / "secrets.env")[
         "ROBOCO_ENCRYPTION_KEY"
@@ -109,10 +112,13 @@ def test_denied_targets_are_distinct_ordered_and_skip_allowed_lines(
 ) -> None:
     log = "\n".join(
         [
-            "egress deny connect CONNECT endpoint=- reason=host_not_allowed target=a.example:443",
+            "egress deny connect CONNECT endpoint=- "
+            "reason=host_not_allowed target=a.example:443",
             "egress allow request POST endpoint=x reason=allowed",
-            "egress deny connect CONNECT endpoint=- reason=host_not_allowed target=a.example:443",
-            "egress deny request GET endpoint=- reason=path_not_allowed target=b.example:443/oauth/token",
+            "egress deny connect CONNECT endpoint=- "
+            "reason=host_not_allowed target=a.example:443",
+            "egress deny request GET endpoint=- "
+            "reason=path_not_allowed target=b.example:443/oauth/token",
             "egress deny dns endpoint=- reason=unexpected_protocol",
         ]
     )

@@ -143,7 +143,6 @@ class TestSubagentBanned:
         assert "Task" in deny, deny
 
 
-
 class TestFableModeHooksInjection:
     """Fable-mode hooks are additive to settings.json, gated by the flag."""
 

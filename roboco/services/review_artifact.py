@@ -12,8 +12,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, ClassVar
-from uuid import UUID
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from sqlalchemy import select
 
@@ -30,6 +29,8 @@ from roboco.runtime.subscription.project_executor import (
 from roboco.services.base import BaseService
 
 if TYPE_CHECKING:
+    from uuid import UUID
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from roboco.runtime.subscription.project_executor import (
@@ -87,7 +88,9 @@ class ReviewArtifactService(BaseService):
     async def _executor_for(self, task: TaskTable) -> ProjectExecutor:
         if task.project_id is None:
             raise ReviewArtifactRefused("task_has_no_project")
-        return await self._provider().executor_for(task.project_id, task.id)
+        return await self._provider().executor_for(
+            cast("UUID", task.project_id), cast("UUID", task.id)
+        )
 
     async def current_for(self, task: TaskTable) -> ReviewArtifactTable | None:
         if task.review_artifact_id is None:
@@ -146,7 +149,7 @@ class ReviewArtifactService(BaseService):
         )
         self.session.add(artifact)
         await self.session.flush()
-        task.review_artifact_id = artifact.id
+        task.review_artifact_id = cast("Any", artifact.id)
         await self.session.flush()
         self.log.info(
             "review_artifact_captured",

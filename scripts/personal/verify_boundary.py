@@ -21,10 +21,10 @@ import sys
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass
+from http import HTTPStatus
 from typing import Any
 
 import stack
-
 from roboco.foundation.policy.subscription_policy import forbidden_env_names
 
 LAUNCHER = "launcher"
@@ -69,8 +69,8 @@ class Check:
 
 
 def _docker(*args: str) -> str:
-    return subprocess.run(  # noqa: S603  # nosec B603
-        ["docker", *args],  # noqa: S607
+    return subprocess.run(  # nosec B603
+        ["docker", *args],
         capture_output=True,
         text=True,
         check=True,
@@ -230,8 +230,8 @@ def check_no_direct_route(containers: dict[str, dict[str, Any]]) -> list[Check]:
             ("route", DIRECT_ROUTE_PROBE),
             ("name_resolution", NAME_RESOLUTION_PROBE),
         ):
-            outcome = subprocess.run(  # noqa: S603  # nosec B603
-                ["docker", "exec", containers[service]["Id"], "python", "-c", probe],  # noqa: S607
+            outcome = subprocess.run(  # nosec B603
+                ["docker", "exec", containers[service]["Id"], "python", "-c", probe],
                 capture_output=True, text=True, check=False, timeout=30,
             ).stdout.strip()  # fmt: skip
             results.append(
@@ -247,7 +247,7 @@ def check_no_direct_route(containers: dict[str, dict[str, Any]]) -> list[Check]:
 def _status(
     url: str, *, host: str | None = None, method: str = "GET", opener: Any = None
 ) -> int:
-    request = urllib.request.Request(url, method=method)  # noqa: S310  # nosec B310
+    request = urllib.request.Request(url, method=method)  # nosec B310
     if host:
         request.add_header("Host", host)
     try:
@@ -266,10 +266,15 @@ def check_http_boundary() -> list[Check]:
     anonymous_status = _status(f"{base}/api/tasks")
     wrong_host_status = _status(f"{base}/api/tasks", host="evil.example")
     opener = stack.owner_session()
-    cross_origin = urllib.request.Request(  # noqa: S310  # nosec B310
-        f"{base}/api/projects", data=b"{}", method="POST",
-        headers={"Content-Type": "application/json", "Origin": "http://evil.example"},
-    )  # fmt: skip
+    cross_origin = urllib.request.Request(  # nosec B310
+        f"{base}/api/projects",
+        data=b"{}",
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Origin": "http://evil.example",
+        },
+    )
     cross_origin_status = 0
     try:
         opener.open(cross_origin, timeout=15)
@@ -277,10 +282,16 @@ def check_http_boundary() -> list[Check]:
         cross_origin_status = exc.code
     connection = http.client.HTTPConnection("127.0.0.1", int(port), timeout=15)
     connection.request(
-        "GET", "/ws/system",
-        headers={"Host": f"localhost:{port}", "Upgrade": "websocket", "Connection": "Upgrade",
-                 "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "c3ludGhldGljLWtleS0xMjM0NQ=="},
-    )  # fmt: skip
+        "GET",
+        "/ws/system",
+        headers={
+            "Host": f"localhost:{port}",
+            "Upgrade": "websocket",
+            "Connection": "Upgrade",
+            "Sec-WebSocket-Version": "13",
+            "Sec-WebSocket-Key": "c3ludGhldGljLWtleS0xMjM0NQ==",
+        },
+    )
     websocket_status = connection.getresponse().status
     flags = json.load(opener.open(f"{base}/api/settings/feature-flags", timeout=15))[
         "flags"
@@ -291,7 +302,7 @@ def check_http_boundary() -> list[Check]:
     return [
         Check(
             "anonymous_api_request_is_refused",
-            anonymous_status == 401,
+            anonymous_status == HTTPStatus.UNAUTHORIZED,
             str(anonymous_status),
         ),
         Check(
@@ -301,12 +312,12 @@ def check_http_boundary() -> list[Check]:
         ),
         Check(
             "cross_origin_write_with_session_is_refused",
-            cross_origin_status == 403,
+            cross_origin_status == HTTPStatus.FORBIDDEN,
             str(cross_origin_status),
         ),
         Check(
             "anonymous_websocket_is_refused",
-            websocket_status != 101,
+            websocket_status != HTTPStatus.SWITCHING_PROTOCOLS,
             str(websocket_status),
         ),
         _check("locked_feature_flags_are_off", unlocked_forbidden),

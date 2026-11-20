@@ -44,7 +44,11 @@ def verify_cli_binary(path: Path) -> str:
         raise CliBuildNotApproved("the CLI binary is unreadable") from exc
     for arch, approved in PINNED_BINARY_SHA256.items():
         if actual == approved:
-            logger.info("CLI build %s (%s) matches the approved digest", PINNED_CLI_VERSION, arch)
+            logger.info(
+                "CLI build %s (%s) matches the approved digest",
+                PINNED_CLI_VERSION,
+                arch,
+            )
             return arch
     raise CliBuildNotApproved(
         f"the CLI binary does not match approved build {PINNED_CLI_VERSION}"

@@ -25,7 +25,7 @@ async def test_forbidden_flags_are_locked_and_off() -> None:
 
 async def test_every_forbidden_flag_that_is_panel_tunable_is_listed_locked() -> None:
     listed = {key for key, _ in FEATURE_FLAGS}
-    effective = {key: False for key in listed}
+    effective = dict.fromkeys(listed, False)
     with patch(
         "roboco.api.routes.settings.feature_flag_effective_values",
         AsyncMock(return_value=effective),

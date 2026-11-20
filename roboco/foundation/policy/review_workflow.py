@@ -47,7 +47,9 @@ def forbids_forge_actions(task: object) -> bool:
     Every stored task carries a workflow, and neither one may act on a code host:
     ``local_review`` never uses one and ``forge`` history is read-only.
     """
-    return str(getattr(task, "review_workflow", "")) in {w.value for w in ReviewWorkflow}
+    return str(getattr(task, "review_workflow", "")) in {
+        w.value for w in ReviewWorkflow
+    }
 
 
 def artifact_label(artifact_id: object, digest: str) -> str:

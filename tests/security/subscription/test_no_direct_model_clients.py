@@ -147,32 +147,35 @@ CHAT_ENTRY_POINTS: list[tuple[str, Callable[[str], Awaitable[Any]]]] = [
     [entry for _, entry in CHAT_ENTRY_POINTS],
     ids=[n for n, _ in CHAT_ENTRY_POINTS],
 )
+@pytest.mark.usefixtures("no_network")
 async def test_chat_clients_refuse_before_connecting(
-    no_network: None, chat: Callable[[str], Awaitable[Any]]
+    chat: Callable[[str], Awaitable[Any]],
 ) -> None:
     with pytest.raises(FeatureUnavailableError) as refused:
         await chat("synthetic prompt")
     assert refused.value.details["code"] == "feature_unavailable"
 
 
-async def test_embedder_is_not_created(no_network: None) -> None:
+@pytest.mark.usefixtures("no_network")
+async def test_embedder_is_not_created() -> None:
     with pytest.raises(FeatureUnavailableError):
         await shared_embedder.get_shared_embedder()
 
 
-async def test_semantic_kb_service_is_not_started(no_network: None) -> None:
+@pytest.mark.usefixtures("no_network")
+async def test_semantic_kb_service_is_not_started() -> None:
     with pytest.raises(FeatureUnavailableError):
         await optimal.get_optimal_service()
 
 
-def test_indexer_worker_embedder_is_not_created(no_network: None) -> None:
+@pytest.mark.usefixtures("no_network")
+def test_indexer_worker_embedder_is_not_created() -> None:
     with pytest.raises(FeatureUnavailableError):
         indexer_worker._build_indexer_embedder()
 
 
-async def test_validator_marks_llm_unavailable_without_connecting(
-    no_network: None,
-) -> None:
+@pytest.mark.usefixtures("no_network")
+async def test_validator_marks_llm_unavailable_without_connecting() -> None:
     validator = ValidatorService.__new__(ValidatorService)
     await validator._test_llm_connectivity()
     assert validator._llm_available is False

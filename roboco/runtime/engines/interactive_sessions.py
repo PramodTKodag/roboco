@@ -76,6 +76,12 @@ class InteractiveSessionsEngine(_Base):
     """Mixin holding the "interactive_sessions" methods moved out of
     AgentOrchestrator."""
 
+    # Re-declared on the concrete class for the same reason as
+    # ``SpawnLaunchEngine._provider_registry``: a member that one method both
+    # reads and assigns needs a bare declaration here for mypy.
+    if TYPE_CHECKING:
+        _chat_runner: ChatTurnRunner | None
+
     @staticmethod
     def _grok_usage_dir(agent_id: str) -> Path:
         """Per-agent grok usage dir under :meth:`_grok_usage_root`.

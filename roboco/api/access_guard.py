@@ -51,7 +51,7 @@ def _carries_session_cookie(scope: Scope) -> bool:
     jar: SimpleCookie = SimpleCookie()
     try:
         jar.load(raw)
-    except Exception:  # noqa: BLE001 - a malformed Cookie header is just "no session"
+    except Exception:
         return SESSION_COOKIE_NAME in raw
     return SESSION_COOKIE_NAME in jar
 

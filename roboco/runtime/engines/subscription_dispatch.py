@@ -11,7 +11,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
 from roboco.agents_config import get_agent_role, get_agent_team
@@ -31,7 +31,7 @@ from roboco.services.gateway.role_config import ROLE_CONFIGS, get_role_config
 
 if TYPE_CHECKING:
     from roboco.config import Settings
-    from roboco.models.runtime import AgentConfig
+    from roboco.models.runtime import OrchestratorAgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,9 @@ async def _linked_workspace_of(project_id: UUID) -> UUID | None:
 
     async with get_session_factory()() as session:
         project = await get_project_service(session).get(project_id)
-        return None if project is None else project.offline_workspace_handle
+        if project is None:
+            return None
+        return cast("UUID | None", project.offline_workspace_handle)
 
 
 def build_project_executor_provider(
@@ -134,7 +136,7 @@ async def resolve_project_binding(project_slug: str | None) -> ProjectBinding | 
             raise WorkspaceNotLinked(f"project {project_slug!r} does not exist")
         return ProjectBinding(
             project_id=UUID(str(project.id)),
-            workspace_handle=project.offline_workspace_handle,
+            workspace_handle=cast("UUID | None", project.offline_workspace_handle),
         )
 
 
@@ -144,7 +146,9 @@ async def _read_text(path: Path | None) -> str:
     return await asyncio.to_thread(path.read_text, "utf-8")
 
 
-async def compose_run_prompt(config: AgentConfig, initial_prompt: str) -> str:
+async def compose_run_prompt(
+    config: OrchestratorAgentConfig, initial_prompt: str
+) -> str:
     """Blueprint, then briefing, then the spawn prompt, as one stdin prompt."""
     parts = [
         await _read_text(config.blueprint_path),
@@ -155,7 +159,7 @@ async def compose_run_prompt(config: AgentConfig, initial_prompt: str) -> str:
 
 
 async def build_run_launch(
-    config: AgentConfig,
+    config: OrchestratorAgentConfig,
     initial_prompt: str,
     binding: ProjectBinding | None,
 ) -> RunLaunch:

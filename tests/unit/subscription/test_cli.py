@@ -301,7 +301,8 @@ def test_only_the_intake_server_receives_the_chat_session_id() -> None:
             manifest_file=Path("/run/roboco/runs/x/tool-manifest.json"),
             session_id="3f2a9c10aabbccdd",
         )
-        return config["mcpServers"][f"roboco_{server.value}"]["env"]
+        env: dict[str, str] = config["mcpServers"][f"roboco_{server.value}"]["env"]
+        return env
 
     assert env_for(VerbServer.INTAKE)["ROBOCO_PROMPTER_SESSION_ID"] == (
         "3f2a9c10aabbccdd"

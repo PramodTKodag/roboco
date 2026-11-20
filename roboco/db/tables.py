@@ -257,7 +257,10 @@ class TaskTable(Base):
     # How the work is reviewed and handed to the owner (migration 113):
     # ``local_review`` captures a local patch artifact; ``forge`` is history.
     review_workflow: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="local_review", server_default="local_review"
+        String(20),
+        nullable=False,
+        default="local_review",
+        server_default="local_review",
     )
     # The task's current local review artifact, or None before the first capture.
     review_artifact_id: Mapped[UUID | None] = mapped_column(

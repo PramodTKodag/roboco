@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from roboco.config import Settings
 from roboco.runtime.subscription.policy import (
-    SubscriptionPolicyViolation,
     EgressRouteInvalid,
+    SubscriptionPolicyViolation,
     build_claude_env,
     parse_egress_route,
     validate_subscription_policy,
@@ -155,7 +155,7 @@ def test_cli_env_ignores_ambient_proxy_variables(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HTTPS_PROXY", "http://attacker.invalid:3128")
-    monkeypatch.setenv("NODE_EXTRA_CA_CERTS", "/tmp/attacker-ca.pem")  # noqa: S108
+    monkeypatch.setenv("NODE_EXTRA_CA_CERTS", "/tmp/attacker-ca.pem")
     env = build_claude_env()
     assert "HTTPS_PROXY" not in env
     assert "NODE_EXTRA_CA_CERTS" not in env

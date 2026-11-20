@@ -46,7 +46,7 @@ from roboco.runtime.subscription.stream_parser import Outcome, StreamParser
 from roboco.runtime.subscription.tool_gateway import ToolDenied, ToolGateway
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Mapping
     from uuid import UUID
 
     from roboco.runtime.subscription.contracts import SubscriptionStatus
@@ -83,7 +83,7 @@ def _kill_group(process: asyncio.subprocess.Process) -> None:
         os.killpg(process.pid, signal.SIGKILL)
 
 
-def _write_private(path: Path, content: dict[str, object]) -> None:
+def _write_private(path: Path, content: Mapping[str, object]) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, _FILE_MODE)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
         json.dump(content, handle)
