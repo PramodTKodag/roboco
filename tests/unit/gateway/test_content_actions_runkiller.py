@@ -65,6 +65,7 @@ async def _seed_claimed_task(
     active_claimant_id: UUID | None,
     plan: dict | None,
     status: TaskStatus = TaskStatus.IN_PROGRESS,
+    review_workflow: str = "local_review",
 ) -> UUID:
     """Seed a project + system creator + an in-progress task and return its id."""
     system_agent = AgentTable(
@@ -108,6 +109,7 @@ async def _seed_claimed_task(
         nature=TaskNature.TECHNICAL,
         project_id=project.id,
         branch_name="feature/backend/RUNKILL1",
+        review_workflow=review_workflow,
         created_by=system_agent.id,
         assigned_to=assigned_to,
         active_claimant_id=active_claimant_id,
@@ -164,6 +166,7 @@ async def test_commit_refreshes_heartbeat_on_success(db_session: AsyncSession) -
         assigned_to=agent_id,
         active_claimant_id=agent_id,
         plan={"steps": ["build"]},
+        review_workflow="forge",
     )
     svc = TaskService(db_session)
     # Stamp an explicitly-old heartbeat so the success-path refresh is
@@ -279,3 +282,25 @@ async def test_progress_no_plan_step_on_stepped_task_is_accepted(
         and "plan_step" in str(entry.get("event", ""))
         for entry in logs
     ), "a soft warning must be emitted when plan_step is omitted on a stepped task"
+
+
+@pytest.mark.asyncio
+async def test_commit_is_refused_for_a_local_review_task(
+    db_session: AsyncSession,
+) -> None:
+    agent_id = await _seed_dev_agent(db_session, "be-dev-local")
+    await _seed_claimed_task(
+        db_session,
+        assigned_to=agent_id,
+        active_claimant_id=agent_id,
+        plan={"steps": ["build"]},
+    )
+
+    env = await _content_actions(db_session).commit(
+        agent_id=agent_id,
+        message="feat(api): add /healthz endpoint for liveness checks",
+    )
+
+    body = env.as_dict()
+    assert body["error"] == "invalid_state"
+    assert "open_pr" in body["remediate"]

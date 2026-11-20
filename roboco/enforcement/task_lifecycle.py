@@ -370,6 +370,11 @@ class GitContext:
     # report-only work the verb runner skipped create_pr for) is exempt from
     # the same pr_number gate: it legitimately has no PR to point the CEO at.
     is_pr_waived: bool = False
+    # A local review task keeps its work in the offline workspace as a patch
+    # artifact: it has no branch and never gets a pull request, so the branch,
+    # PR-created and CEO-escalation PR gates do not apply. The artifact itself
+    # is required by the ``changes_captured`` precondition on ``i_am_done``.
+    is_local_review: bool = False
 
 
 def validate_git_requirements(
@@ -415,7 +420,7 @@ def _check_doc_phase_gate(transition: tuple[str, str], git_ctx: GitContext) -> N
                 "parallel. Wait for Documenter to call i_documented()."
             ),
         )
-    if not git_ctx.pr_created:
+    if not git_ctx.pr_created and not git_ctx.is_local_review:
         raise GitRequirementError(
             transition=transition,
             requirement="pr_created",
@@ -440,6 +445,7 @@ def _check_ceo_escalation_gate(
         and git_ctx.pr_number is None
         and not git_ctx.is_umbrella
         and not git_ctx.is_pr_waived
+        and not git_ctx.is_local_review
     ):
         raise GitRequirementError(
             transition=transition,
@@ -459,6 +465,7 @@ def _check_claim_branch_gate(transition: tuple[str, str], git_ctx: GitContext) -
         and not git_ctx.branch_name
         and not git_ctx.is_coordination
         and not git_ctx.is_external_review
+        and not git_ctx.is_local_review
     ):
         raise GitRequirementError(
             transition=transition,

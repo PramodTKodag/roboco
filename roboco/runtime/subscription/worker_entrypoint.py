@@ -29,6 +29,7 @@ from roboco.runtime.subscription.contracts import (
     MAX_STREAM_BYTES,
     ApplyPatchPayload,
     CheckConventionsPayload,
+    AcceptChangesPayload,
     ExportPatchPayload,
     ImportFinding,
     ImportOptions,
@@ -51,6 +52,7 @@ from roboco.runtime.subscription.worker_files import (
     write_file,
 )
 from roboco.runtime.subscription.worker_patch import (
+    accept_changes,
     apply_patch,
     export_patch,
     init_baseline,
@@ -194,6 +196,8 @@ def _file_operation(job: WorkerJob, workspace: Path) -> FileOutput | None:
             output = apply_patch(workspace, payload.patch)
         case ExportPatchPayload():
             output = export_patch(workspace)
+        case AcceptChangesPayload():
+            output = accept_changes(workspace)
     return output
 
 

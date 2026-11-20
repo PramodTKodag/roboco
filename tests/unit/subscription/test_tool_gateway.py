@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from roboco.runtime.subscription.contracts import (
+    CONTROLLER_ONLY_OPERATIONS,
     MAX_RUN_SECONDS,
     RunRequest,
     RunSpec,
@@ -22,7 +23,9 @@ from roboco.runtime.subscription.contracts import (
 from roboco.runtime.subscription.tool_gateway import ToolDenied, ToolGateway
 
 READ_ONLY = (WorkerOperation.READ_FILE, WorkerOperation.LIST_FILES)
-ALL_OPERATIONS = tuple(WorkerOperation)
+ALL_OPERATIONS = tuple(
+    op for op in WorkerOperation if op not in CONTROLLER_ONLY_OPERATIONS
+)
 
 
 class RecordingExecutor:

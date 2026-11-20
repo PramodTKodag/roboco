@@ -42,6 +42,7 @@ class ChoreographerHelpers:
     journal: Any
     audit: Any
     evidence_repo: Any
+    review_artifacts: Any
 
     async def _emit_rejection(
         self,

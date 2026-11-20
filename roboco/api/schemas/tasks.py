@@ -302,6 +302,23 @@ class TaskUpdate(BaseModel):
 # =============================================================================
 
 
+class ReviewExportPatch(BaseModel):
+    """One accepted patch of the owner's export series."""
+
+    artifact_id: UUID
+    task_id: UUID
+    sha256: str
+    paths: list[str]
+    patch: str
+
+
+class ReviewExportResponse(BaseModel):
+    """Accepted patches under a task, in the order they must be applied."""
+
+    root_task_id: UUID
+    patches: list[ReviewExportPatch]
+
+
 class TaskResponse(BaseModel):
     """Task response model with full detail."""
 
@@ -407,6 +424,8 @@ class TaskResponse(BaseModel):
     branch_name: str | None = None
     pr_number: int | None = None
     pr_url: str | None = None
+    review_workflow: str = "local_review"
+    review_artifact_id: UUID | None = None
 
     # Prompter origin tracking
     source: str = "manual"
@@ -1000,6 +1019,8 @@ def task_to_response(task: "TaskTable") -> TaskResponse:
         branch_name=getattr(task, "branch_name", None),
         pr_number=getattr(task, "pr_number", None),
         pr_url=getattr(task, "pr_url", None),
+        review_workflow=str(getattr(task, "review_workflow", "local_review")),
+        review_artifact_id=getattr(task, "review_artifact_id", None),
         source=getattr(task, "source", "manual"),
         confirmed_by_human=getattr(task, "confirmed_by_human", False),
     )

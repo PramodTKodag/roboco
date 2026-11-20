@@ -43,7 +43,10 @@ from roboco.config import settings
 from roboco.foundation.policy import lifecycle as spec_module
 from roboco.foundation.policy import tracing as _tr
 from roboco.foundation.policy.content import markers
+from roboco.foundation.policy.review_workflow import is_local_review
+from roboco.runtime.subscription.project_executor import ProjectExecutionUnavailable
 from roboco.models.task import DocRef
+from roboco.services.review_artifact import ReviewArtifactRefused
 from roboco.services.gateway.choreographer import findings as findings_lib
 from roboco.services.gateway.choreographer.evidence_legs import (
     LegBudget,
@@ -553,8 +556,8 @@ class DocMixin(_Base):
         # Push the doc commit to origin BEFORE the transition, so it reaches the
         # already-open PR (the PM merges the pushed branch). Without this the
         # doc commit lives only in the documenter's clone and the merge drops it.
-        if push_rejection := await self._ensure_doc_branch_pushed(
-            doc_agent_id, task_id, briefing
+        if push_rejection := await self._publish_documentation(
+            doc_agent_id, task_id, owned_task, briefing
         ):
             return push_rejection
 
@@ -651,6 +654,40 @@ class DocMixin(_Base):
         if warning:
             env.warning = warning
         return env
+
+    async def _publish_documentation(
+        self, doc_agent_id: UUID, task_id: UUID, task: Any, briefing: Any
+    ) -> Envelope | None:
+        """Make the documentation reach the reviewer: push it, or fold it locally.
+
+        A local review task adds the documenter's files to the artifact QA already
+        reviewed, leaving every reviewed change untouched; a forge task pushes its
+        branch.
+        """
+        if not is_local_review(task):
+            return await self._ensure_doc_branch_pushed(
+                doc_agent_id, task_id, briefing
+            )
+        try:
+            await self.review_artifacts.capture_documentation(
+                task, agent_id=doc_agent_id
+            )
+        except ReviewArtifactRefused as exc:
+            return Envelope.invalid_state(
+                message=f"your documentation cannot be captured: {exc.reason_code}",
+                remediate=(
+                    "add only documentation files and leave every file the"
+                    " developer changed untouched, then call i_documented again"
+                ),
+                context_briefing=briefing,
+            )
+        except ProjectExecutionUnavailable as exc:
+            return Envelope.invalid_state(
+                message=f"the offline worker is unavailable: {exc.reason_code}",
+                remediate="retry i_documented shortly",
+                context_briefing=briefing,
+            )
+        return None
 
     async def _ensure_doc_branch_pushed(
         self, doc_agent_id: UUID, task_id: UUID, briefing: Any

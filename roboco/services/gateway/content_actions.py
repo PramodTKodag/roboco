@@ -37,6 +37,7 @@ from roboco.foundation.policy.injection_guard import (
     screen_external_text_with_decisions,
 )
 from roboco.foundation.policy.journaling import Scope as _Scope
+from roboco.foundation.policy.review_workflow import is_local_review
 from roboco.llm.providers.nebius_sandboxes import (
     run_sandbox_command,
     tail_for_evidence,
@@ -1030,6 +1031,18 @@ class ContentActions:
             )
         if reject := await self._active_claim_violation(agent_id, t):
             return reject
+        if is_local_review(t):
+            return Envelope.invalid_state(
+                message=(
+                    "this task uses local review: changes are not committed to"
+                    " a branch"
+                ),
+                remediate=(
+                    "write files with the workspace tools, then call open_pr()"
+                    " to capture them as the review artifact"
+                ),
+                context_briefing={},
+            )
         canonical_prefix = f"[{str(t.id)[:8]}]"
         final_message = f"{canonical_prefix} {subject}"
         try:

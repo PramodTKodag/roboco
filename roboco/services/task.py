@@ -56,6 +56,7 @@ from roboco.foundation.policy.lane import transitive_dependents
 from roboco.foundation.policy.lifecycle import (
     _ORG_WIDE_ROLES as _SPEC_ORG_WIDE_ROLES,
 )
+from roboco.foundation.policy.review_workflow import is_local_review
 from roboco.models.base import (
     AgentRole,
     AgentStatus,
@@ -1332,6 +1333,7 @@ class TaskService(BaseService):
             # exempt from the pr_number CEO-escalation gate the same way an
             # umbrella is, even though it carries a real branch.
             is_pr_waived=markers.is_pr_waived(task),
+            is_local_review=is_local_review(task),
         )
         validate_git_requirements(current, target, git_ctx)
 
@@ -3240,6 +3242,12 @@ class TaskService(BaseService):
         Raises:
             ValueError: If branch cannot be created
         """
+        if is_local_review(task) and task.project_id:
+            # Local review keeps the work in the offline workspace: there is no
+            # branch, no remote and no forge call. The reviewed unit is the
+            # task's patch artifact (``ReviewArtifactService``).
+            return ""
+
         if task.branch_name:
             # A set branch_name is not proof the ref is on origin: a manual
             # field write, or a prior failed create_branch whose rollback
@@ -7358,9 +7366,11 @@ class TaskService(BaseService):
         """
         from roboco.enforcement.task_lifecycle import check_parallel_completion
 
+        # A local review task has no PR: its review artifact (required before
+        # QA) is what stands in for "the work is ready to review".
         ready_for_pm = check_parallel_completion(
             docs_complete=True,
-            pr_created=task.pr_created,
+            pr_created=bool(task.pr_created) or is_local_review(task),
         )
         if ready_for_pm:
             # Capture the prior claimant (the documenter, or whoever held
@@ -7550,7 +7560,8 @@ class TaskService(BaseService):
         is_umbrella = is_batch_umbrella(
             batch_id=task.batch_id, parent_task_id=task.parent_task_id
         )
-        if not task.branch_name and not is_umbrella:
+        local_review = is_local_review(task)
+        if not task.branch_name and not is_umbrella and not local_review:
             self.log.warning(
                 "Cannot submit for PM review - no branch (claim task first)",
                 task_id=str(task_id),
@@ -7558,7 +7569,7 @@ class TaskService(BaseService):
             return False
         pr_waived = markers.is_pr_waived(task)
         if (not task.pr_created or not task.pr_number) and not (
-            is_umbrella or pr_waived
+            is_umbrella or pr_waived or local_review
         ):
             self.log.warning(
                 "Cannot submit for PM review - PR must be created first",
@@ -8217,13 +8228,15 @@ class TaskService(BaseService):
         # escalates to the CEO with no pr_number once every root-subtask is
         # done. A PR-waived root (zero commits relative to its parent —
         # report-only work) is exempt the same way: it has a real branch, but
-        # legitimately no PR to point the CEO at.
+        # legitimately no PR to point the CEO at. A local-review root has no PR
+        # by design: the owner reviews the accepted patch artifacts instead.
         if (
             not task.pr_number
             and not is_batch_umbrella(
                 batch_id=task.batch_id, parent_task_id=task.parent_task_id
             )
             and not markers.is_pr_waived(task)
+            and not is_local_review(task)
         ):
             return (
                 "Cannot escalate to CEO - task has no PR",

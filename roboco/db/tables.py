@@ -250,9 +250,26 @@ class TaskTable(Base):
         nullable=True,
     )
 
-    # PR Tracking
+    # PR Tracking (read-only history: only the ``forge`` workflow ever set it)
     pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     pr_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # How the work is reviewed and handed to the owner (migration 113):
+    # ``local_review`` captures a local patch artifact; ``forge`` is history.
+    review_workflow: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="local_review", server_default="local_review"
+    )
+    # The task's current local review artifact, or None before the first capture.
+    review_artifact_id: Mapped[UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(
+            "review_artifacts.id",
+            ondelete="SET NULL",
+            use_alter=True,
+            name="fk_tasks_review_artifact_id",
+        ),
+        nullable=True,
+    )
 
     # Parallel Execution Tracking (for AWAITING_DOCUMENTATION phase)
     docs_complete: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -2426,6 +2443,46 @@ class TaskReviewFindingTable(Base):
     __table_args__ = (
         Index("ix_task_review_findings_task_status", "task_id", "status"),
     )
+
+
+class ReviewArtifactTable(Base):
+    """One captured patch of a task's work: the local-review replacement for a PR.
+
+    The patch text is stored with its SHA-256 digest; every read re-hashes the
+    bytes, so a stored artifact that no longer matches its digest is never
+    served. A re-capture after a bounce supersedes the previous row instead of
+    editing it. ``status`` is a plain ``String`` (mirrors
+    ``TaskReviewFindingTable``): ``open`` -> ``accepted`` | ``rejected`` |
+    ``superseded``.
+    """
+
+    __tablename__ = "review_artifacts"
+
+    id: Mapped[PyUUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    task_id: Mapped[PyUUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("tasks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    captured_by: Mapped[PyUUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    patch: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    paths: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="open", server_default="open"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    __table_args__ = (Index("ix_review_artifacts_task_status", "task_id", "status"),)
 
 
 # =============================================================================

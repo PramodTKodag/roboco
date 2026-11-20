@@ -52,6 +52,7 @@ from roboco.exceptions import (
 )
 from roboco.foundation.policy import lifecycle
 from roboco.foundation.policy.pr_labels import CONVENTIONS_PR_LABELS, derive_pr_labels
+from roboco.foundation.policy.review_workflow import is_local_review
 from roboco.models.base import AgentRole, TaskStatus
 from roboco.models.env_branches import effective_environments, head_branch
 from roboco.runtime.subscription.project_executor import (
@@ -6396,6 +6397,8 @@ class GitService(BaseService):
         that same task could be stale by whatever origin gained since. No
         claim-time refresh exists to close this; it is accepted, not fixed.
         """
+        if is_local_review(task):
+            return await self._local_review_conventions(task, timeout=timeout)
         try:
             branch = task.branch_name
             if not branch:
@@ -6415,6 +6418,31 @@ class GitService(BaseService):
                 "could_not_run": True,
                 "reason": f"resolution failed: {exc}"[:300],
             }
+        if not changed:
+            return {"findings": [], "could_not_run": False}
+        return await self._run_conventions_validator(task, changed, timeout=timeout)
+
+    async def _local_review_conventions(
+        self, task: Any, *, timeout: float | None
+    ) -> dict[str, Any]:
+        """Conventions for a local review task: the artifact's files, in the worker.
+
+        No branch or remote is involved. A task whose artifact cannot be read
+        fails closed like any other validator that could not run.
+        """
+        from roboco.services.review_artifact import (
+            ReviewArtifactRefused,
+            get_review_artifact_service,
+        )
+
+        try:
+            changed = await get_review_artifact_service(self.session).present_files(
+                task
+            )
+        except ReviewArtifactRefused as exc:
+            return self._conventions_could_not_run(
+                f"review artifact unreadable: {exc.reason_code}"
+            )
         if not changed:
             return {"findings": [], "could_not_run": False}
         return await self._run_conventions_validator(task, changed, timeout=timeout)

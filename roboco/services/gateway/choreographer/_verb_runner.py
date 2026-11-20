@@ -25,6 +25,10 @@ import structlog
 
 from roboco.foundation.policy import lifecycle as spec
 from roboco.foundation.policy.content import markers
+from roboco.foundation.policy.review_workflow import (
+    forbids_forge_actions,
+    is_local_review,
+)
 
 logger = structlog.get_logger()
 
@@ -37,6 +41,10 @@ _SideEffectHandler = Callable[[Any, Any, Any], Awaitable[Any]]
 # instead of completing; these are the two names the runner checks for a
 # zero-diff waiver BEFORE attempting the call.
 _PR_CREATION_SIDE_EFFECTS = frozenset({"create_pr", "create_root_pr"})
+# Side effects that act on a code host. Review is local, so none may ever run.
+_OUTBOUND_SIDE_EFFECTS = frozenset(
+    {"push_branch", "create_pr", "create_root_pr", "pr_merge"}
+)
 # The composed action a PR waiver reroutes: instead of submit_for_review
 # (in_progress -> awaiting_pr_review, the in-path gate a diff-less task has
 # nothing for a reviewer to check), a waived task skips straight to
@@ -128,6 +136,12 @@ class VerbRunner:
         pr_waived = False
         for side_effect_name in intent.pre_side_effects:
             if side_effect_name in _PR_CREATION_SIDE_EFFECTS:
+                if is_local_review(task):
+                    # No pull request exists in this workflow, so there is no
+                    # review gate to enter either: skip creation and take the
+                    # same gate-skipping transition a branchless root takes.
+                    pr_waived = True
+                    continue
                 if await self._maybe_waive_pr_creation(task, agent, precomputed_ahead):
                     pr_waived = True
                     continue
@@ -269,6 +283,17 @@ class VerbRunner:
         handler = self._side_effect_handlers().get(side_effect_name)
         if handler is None:
             raise ValueError(f"unknown side effect '{side_effect_name}'")
+        if side_effect_name in _OUTBOUND_SIDE_EFFECTS and forbids_forge_actions(task):
+            logger.warning(
+                "outbound_side_effect_refused",
+                side_effect=side_effect_name,
+                task_id=str(task.id),
+            )
+            raise ValueError(
+                f"INVALID_STATE: '{side_effect_name}' would act on a code host;"
+                " this deployment never pushes, opens or merges pull requests."
+                " Changes are reviewed as local patch artifacts instead."
+            )
         return await handler(self, task, agent)
 
     # -- Atomic handlers ---------------------------------------------------

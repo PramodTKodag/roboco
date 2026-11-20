@@ -15,6 +15,7 @@ from roboco.api.deps import (
     DbSession,
     PermissionServiceDep,
     get_permission_service,
+    require_ceo_role,
     require_pm_or_above,
 )
 from roboco.api.schemas.attestation import (
@@ -34,6 +35,8 @@ from roboco.api.schemas.tasks import (
     EscalateResponse,
     ProgressRequest,
     QANotes,
+    ReviewExportPatch,
+    ReviewExportResponse,
     SoftBlockRequest,
     SubstituteRequest,
     TaskCountResponse,
@@ -69,6 +72,7 @@ from roboco.api.utils.tasks import (
 from roboco.enforcement import get_valid_transitions
 from roboco.exceptions import GitError, TaskLifecycleError
 from roboco.foundation.policy import task_completeness as tc
+from roboco.foundation.policy.review_workflow import is_local_review
 from roboco.logging import get_logger
 from roboco.models.base import AgentRole, TaskStatus, Team
 from roboco.models.task import TaskCreate
@@ -91,6 +95,10 @@ from roboco.services.notification_delivery import (
     get_notification_delivery_service,
 )
 from roboco.services.permissions import TaskAction
+from roboco.services.review_artifact import (
+    ReviewArtifactRefused,
+    get_review_artifact_service,
+)
 from roboco.services.repositories.review_findings import ReviewFindingsRepository
 from roboco.services.task import (
     SoftBlockInput,
@@ -1439,7 +1447,17 @@ async def submit_for_qa(
                 "POST /api/tasks/{id}/verify before /submit-qa."
             ),
         )
-    if not task.commits:
+    if is_local_review(task):
+        if task.review_artifact_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "NO_REVIEW_ARTIFACT: Cannot submit for QA before the "
+                    "changes are captured. Call the gateway `open_pr()` verb "
+                    "first, which stores them as the task's review artifact."
+                ),
+            )
+    elif not task.commits:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -1449,7 +1467,7 @@ async def submit_for_qa(
                 "/api/tasks/{id}/submit-qa."
             ),
         )
-    if task.pr_number is None:
+    if task.pr_number is None and not is_local_review(task):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
@@ -1904,6 +1922,51 @@ async def ceo_approve_task(
 
     await db.commit()
     return task_to_response(task)
+
+
+@router.get("/{task_id}/review-export", response_model=ReviewExportResponse)
+async def export_accepted_review_patches(
+    task_id: UUID,
+    db: DbSession,
+    agent: CurrentAgentContext,
+) -> ReviewExportResponse:
+    """Owner-only: the accepted patches under a task, in the order to apply them.
+
+    Read-only. Every patch is re-hashed and re-inspected before it is returned.
+    The application never pushes, publishes or merges these changes: the owner
+    applies them to their own checkout.
+    """
+    require_ceo_role(agent.role, action="export reviewed patches")
+    task = await get_task_service(db).get(task_id)
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Task not found"
+        )
+    if not is_local_review(task):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only local-review tasks have patches to export",
+        )
+    try:
+        series = await get_review_artifact_service(db).accepted_series_under(task_id)
+    except ReviewArtifactRefused as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"A reviewed patch failed verification: {exc.reason_code}",
+        ) from exc
+    return ReviewExportResponse(
+        root_task_id=task_id,
+        patches=[
+            ReviewExportPatch(
+                artifact_id=item.artifact_id,
+                task_id=item.task_id,
+                sha256=item.sha256,
+                paths=list(item.paths),
+                patch=item.content.decode("utf-8"),
+            )
+            for item in series
+        ],
+    )
 
 
 @router.get("/{task_id}/ceo-approve", response_model=TaskResponse)

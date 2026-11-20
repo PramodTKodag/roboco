@@ -8,7 +8,11 @@ from uuid import uuid4
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
-from roboco.runtime.subscription.contracts import WorkerOperation, WorkerResult
+from roboco.runtime.subscription.contracts import (
+    CONTROLLER_ONLY_OPERATIONS,
+    WorkerOperation,
+    WorkerResult,
+)
 from roboco.runtime.subscription.gateway_socket import GatewayResponse
 from roboco.runtime.subscription.worker_tools_mcp import build_server
 
@@ -53,7 +57,9 @@ async def test_nothing_or_only_unknown_names_register_zero_tools(
 
 
 async def test_every_operation_has_a_bridge_function() -> None:
-    names = tuple(op.value for op in WorkerOperation)
+    names = tuple(
+        op.value for op in WorkerOperation if op not in CONTROLLER_ONLY_OPERATIONS
+    )
     server = build_server(FakeClient(), names)  # type: ignore[arg-type]
     assert await _names(server) == set(names)
 

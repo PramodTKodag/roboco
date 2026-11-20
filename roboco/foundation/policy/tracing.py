@@ -20,6 +20,7 @@ from enum import StrEnum
 from typing import Any
 
 from roboco.foundation.policy.content import markers
+from roboco.foundation.policy.review_workflow import is_local_review
 
 
 class Requirement(StrEnum):
@@ -99,11 +100,17 @@ def _check_plan(task: Any, _ctx: GateContext) -> list[str]:
 
 
 def _check_commits(task: Any, _ctx: GateContext) -> list[str]:
+    # Local review work is reviewed as a patch artifact, not as commits; its
+    # capture is required by the ``changes_captured`` precondition on i_am_done.
+    if is_local_review(task):
+        return []
     commits = getattr(task, "commits", None) or []
     return [] if len(commits) >= 1 else ["commits>=1"]
 
 
 def _check_pr_open(task: Any, _ctx: GateContext) -> list[str]:
+    if is_local_review(task):
+        return []
     return [] if getattr(task, "pr_number", None) else ["pr_open"]
 
 

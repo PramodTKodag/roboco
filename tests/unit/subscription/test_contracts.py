@@ -14,6 +14,8 @@ from roboco.runtime.subscription.contracts import (
     RunState,
     SubscriptionState,
     SubscriptionStatus,
+    ToolManifest,
+    WorkerOperation,
 )
 
 MODEL = sorted(ALLOWED_MODEL_IDS)[0]
@@ -227,3 +229,8 @@ def test_worker_result_is_bounded_per_stream() -> None:
             truncated=False,
             reason_code=None,
         )
+
+
+def test_a_manifest_cannot_grant_a_controller_only_operation() -> None:
+    with pytest.raises(ValidationError, match="controller-only"):
+        ToolManifest(operations=(WorkerOperation.ACCEPT_CHANGES,))

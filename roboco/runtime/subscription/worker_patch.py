@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 GIT_TIMEOUT_SECONDS = 60
 MAX_GIT_OUTPUT_BYTES = 8 * 1024 * 1024
 _BASELINE_MESSAGE = "workspace baseline"
+_ACCEPTED_MESSAGE = "accepted changes"
 _WORKER_HOME = "/tmp"  # nosec B108 - worker container tmpfs, not a host path
 _GIT_ENV = {
     "PATH": "/usr/local/bin:/usr/bin:/bin",
@@ -94,6 +95,30 @@ def init_baseline(root: Path) -> None:
     for step in steps:
         if _git(root, *step).returncode != 0:
             raise WorkspaceFileError("baseline_failed")
+
+
+def accept_changes(root: Path) -> FileOutput:
+    """Commit the workspace as the new baseline: the next export starts from here."""
+    if _git(root, "add", "--all").returncode != 0:
+        raise WorkspaceFileError("accept_failed")
+    committed = _git(
+        root,
+        "-c",
+        "user.name=roboco-worker",
+        "-c",
+        "user.email=worker@localhost",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "--no-verify",
+        "-m",
+        _ACCEPTED_MESSAGE,
+    )
+    if committed.returncode != 0:
+        raise WorkspaceFileError("accept_failed")
+    return FileOutput("accepted")
 
 
 def _numstat_paths(raw: bytes) -> list[str]:

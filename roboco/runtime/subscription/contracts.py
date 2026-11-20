@@ -69,6 +69,14 @@ class WorkerOperation(StrEnum):
     RUN_COMMAND = "run_command"
     EXPORT_PATCH = "export_patch"
     CHECK_CONVENTIONS = "check_conventions"
+    ACCEPT_CHANGES = "accept_changes"
+
+
+# Operations only the controller may run. A model run's manifest can never grant
+# them: accepting changes moves the baseline every later review is measured from.
+CONTROLLER_ONLY_OPERATIONS: frozenset[WorkerOperation] = frozenset(
+    {WorkerOperation.ACCEPT_CHANGES}
+)
 
 
 class SubscriptionStatus(_Frozen):
@@ -144,7 +152,7 @@ _READ_ONLY_OPERATIONS: frozenset[WorkerOperation] = frozenset(
     }
 )
 _OPERATIONS_ALLOWED_FOR_PURPOSE: dict[str, frozenset[WorkerOperation]] = {
-    "delivery": frozenset(WorkerOperation),
+    "delivery": frozenset(WorkerOperation) - CONTROLLER_ONLY_OPERATIONS,
     "intake": _READ_ONLY_OPERATIONS,
     "secretary": frozenset(),
     "background": frozenset(),
@@ -182,6 +190,11 @@ class ToolManifest(_Frozen):
     ) -> tuple[WorkerOperation, ...]:
         if len(set(value)) != len(value):
             raise ValueError("manifest operations must be unique")
+        if controller_only := CONTROLLER_ONLY_OPERATIONS.intersection(value):
+            raise ValueError(
+                "a run manifest may not grant controller-only operations: "
+                + ", ".join(sorted(op.value for op in controller_only))
+            )
         return value
 
     @field_validator("verb_grants")
@@ -333,6 +346,15 @@ class ExportPatchPayload(_Frozen):
     operation: Literal["export_patch"] = "export_patch"
 
 
+class AcceptChangesPayload(_Frozen):
+    """Owner-reviewed work becomes the workspace baseline for the next task.
+
+    Controller-only: no model manifest ever grants this operation.
+    """
+
+    operation: Literal["accept_changes"] = "accept_changes"
+
+
 MAX_CONVENTION_FILES = 500
 
 
@@ -351,7 +373,8 @@ WorkerPayload = Annotated[
     | ApplyPatchPayload
     | RunCommandPayload
     | ExportPatchPayload
-    | CheckConventionsPayload,
+    | CheckConventionsPayload
+    | AcceptChangesPayload,
     Field(discriminator="operation"),
 ]
 

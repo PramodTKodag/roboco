@@ -13,6 +13,7 @@ from roboco.db.tables import (
     AgentTable,
     AuditLogTable,
     ProjectTable,
+    ReviewArtifactTable,
     TaskTable,
     WorkSessionTable,
 )
@@ -92,11 +93,17 @@ async def cleanup_project_durable_rows(
                         WorkSessionTable.task_id.in_(task_ids)
                     )
                 )
-                # children reference parents; clear the links before deleting
+                # children reference parents, and tasks point at their review
+                # artifact; clear both links before deleting either side
                 await cleanup.execute(
                     update(TaskTable)
                     .where(TaskTable.id.in_(task_ids))
-                    .values(parent_task_id=None)
+                    .values(parent_task_id=None, review_artifact_id=None)
+                )
+                await cleanup.execute(
+                    delete(ReviewArtifactTable).where(
+                        ReviewArtifactTable.task_id.in_(task_ids)
+                    )
                 )
                 await cleanup.execute(
                     delete(TaskTable).where(TaskTable.id.in_(task_ids))

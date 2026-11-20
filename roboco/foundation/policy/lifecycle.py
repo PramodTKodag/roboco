@@ -37,6 +37,7 @@ from roboco.config import settings
 # from `roboco.foundation.identity` directly.
 from roboco.foundation.identity import Role, Team
 from roboco.foundation.policy.content import markers
+from roboco.foundation.policy.review_workflow import is_local_review
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1020,11 +1021,20 @@ def _p_has_plan_or_supplied(task: Any, _agent: Any, ctx: Any) -> bool:
 
 
 def _p_has_commits(task: Any, _agent: Any, _ctx: Any) -> bool:
-    return bool(getattr(task, "commits", None))
+    """Forge work needs a commit; local review work lives in the worker workspace
+    and is checked by ``_p_changes_captured`` once the artifact exists."""
+    return is_local_review(task) or bool(getattr(task, "commits", None))
 
 
 def _p_no_pr_yet(task: Any, _agent: Any, _ctx: Any) -> bool:
-    return getattr(task, "pr_number", None) is None
+    return is_local_review(task) or getattr(task, "pr_number", None) is None
+
+
+def _p_changes_captured(task: Any, _agent: Any, _ctx: Any) -> bool:
+    """A local review task is submittable only once its patch artifact exists."""
+    return (
+        not is_local_review(task) or getattr(task, "review_artifact_id", None) is not None
+    )
 
 
 def _p_owns_task(task: Any, _agent: Any, ctx: Any) -> bool:
@@ -1062,6 +1072,16 @@ PRECONDITION_COMMITS = Precondition(
         "commit at least one change before opening a PR — call commit(message='...')"
     ),
     missing_token="commits>=1",
+)
+
+PRECONDITION_CHANGES_CAPTURED = Precondition(
+    key="changes_captured",
+    check=_p_changes_captured,
+    remediate=(
+        "capture your changes for review first — call open_pr(task_id), which"
+        " stores your workspace changes as the task's review artifact"
+    ),
+    missing_token="changes_captured",
 )
 
 PRECONDITION_NO_PR = Precondition(
@@ -1309,7 +1329,11 @@ _INTENT_VERBS: dict[str, IntentSpec] = {
             " open_pr first) and >=1 commit."
         ),
         composes=("submit_verification", "submit_qa"),
-        extra_preconditions=(PRECONDITION_OWNERSHIP, PRECONDITION_COMMITS),
+        extra_preconditions=(
+            PRECONDITION_OWNERSHIP,
+            PRECONDITION_COMMITS,
+            PRECONDITION_CHANGES_CAPTURED,
+        ),
         side_effects=(),
         next_hint=_next_hint_idle,
     ),

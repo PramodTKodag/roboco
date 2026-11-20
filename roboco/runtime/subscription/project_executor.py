@@ -20,7 +20,9 @@ from pydantic import ValidationError
 from roboco.runtime.subscription.contracts import (
     COMMAND_TIMEOUT_SECONDS,
     MAX_CONVENTION_FILES,
+    AcceptChangesPayload,
     CheckConventionsPayload,
+    ExportPatchPayload,
     RunCommandPayload,
     WorkerJob,
     WorkerOperation,
@@ -65,6 +67,14 @@ class ConventionsOutcome:
         return self.reason is not None
 
 
+@dataclass(frozen=True)
+class PatchOutcome:
+    """The workspace's unreviewed changes as patch text; ``truncated`` means cut off."""
+
+    patch: str
+    truncated: bool
+
+
 class WorkerExecutionClient(Protocol):
     async def execute(self, job: WorkerJob) -> WorkerResult: ...
 
@@ -81,7 +91,17 @@ class ConventionsChecker(Protocol):
         ...
 
 
-class ProjectExecutor(CommandRunner, ConventionsChecker, Protocol):
+class PatchWorkspace(Protocol):
+    async def export_patch(self) -> PatchOutcome:
+        """Export the workspace's changes since its baseline, minus denied paths."""
+        ...
+
+    async def accept_changes(self) -> None:
+        """Make the workspace's current state the baseline for the next export."""
+        ...
+
+
+class ProjectExecutor(CommandRunner, ConventionsChecker, PatchWorkspace, Protocol):
     """Everything the controller may ask of a project's offline workspace."""
 
 
@@ -134,6 +154,21 @@ class WorkerProjectExecutor:
             lines.extend(outcome.finding_lines)
         return ConventionsOutcome(finding_lines=tuple(lines))
 
+    async def export_patch(self) -> PatchOutcome:
+        job = self._job(WorkerOperation.EXPORT_PATCH, ExportPatchPayload)
+        result = await self._launcher.execute(job)
+        _require_answer_to(job, result)
+        if _exit_code_of(result) != 0:
+            raise ProjectExecutionUnavailable("patch_export_failed")
+        return PatchOutcome(patch=result.stdout, truncated=result.truncated)
+
+    async def accept_changes(self) -> None:
+        job = self._job(WorkerOperation.ACCEPT_CHANGES, AcceptChangesPayload)
+        result = await self._launcher.execute(job)
+        _require_answer_to(job, result)
+        if _exit_code_of(result) != 0:
+            raise ProjectExecutionUnavailable("accept_changes_failed")
+
     async def _check_conventions_batch(self, files: list[str]) -> ConventionsOutcome:
         job = self._job(
             WorkerOperation.CHECK_CONVENTIONS, CheckConventionsPayload, files=files
@@ -159,7 +194,10 @@ class WorkerProjectExecutor:
     def _job(
         self,
         operation: WorkerOperation,
-        payload_type: type[RunCommandPayload] | type[CheckConventionsPayload],
+        payload_type: type[RunCommandPayload]
+        | type[CheckConventionsPayload]
+        | type[ExportPatchPayload]
+        | type[AcceptChangesPayload],
         **payload_fields: object,
     ) -> WorkerJob:
         try:

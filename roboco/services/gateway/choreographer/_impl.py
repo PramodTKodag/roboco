@@ -30,6 +30,7 @@ from roboco.foundation.policy.content import (
     validate_findings,
 )
 from roboco.foundation.policy.content.validators import reject_trivial
+from roboco.foundation.policy.review_workflow import artifact_label, is_local_review
 from roboco.runtime.subscription.project_executor import ProjectExecutionUnavailable
 from roboco.services.base import UnauthorizedError
 from roboco.services.content_notes import apply_structured_note
@@ -61,6 +62,7 @@ from roboco.services.gateway.merge_chain import (
     find_topology_issue,
     resolve_parent_branch,
 )
+from roboco.services.review_artifact import ReviewArtifactRefused
 from roboco.services.gateway.remediation import (
     hint_for_evidence_not_inspected,
     hint_for_missing_ac_coverage,
@@ -85,6 +87,19 @@ from roboco.services.repositories.review_findings import (
 )
 
 logger = structlog.get_logger()
+
+_ARTIFACT_REFUSAL_REMEDIATION: dict[str, str] = {
+    "patch_empty": "make and save your changes in the workspace, then call open_pr",
+    "patch_truncated": (
+        "the change is larger than one reviewable patch; split it into smaller"
+        " tasks and call i_am_blocked so your PM can re-plan"
+    ),
+    "secrets_suspected": (
+        "remove the suspected secret from the workspace file named in the detail,"
+        " load it from the environment instead, then call open_pr again"
+    ),
+    "patch_path_denied": "remove changes to protected or credential paths",
+}
 
 if TYPE_CHECKING:
     # The composed ``Choreographer`` resolves mixin helpers (``_project_slug_for``,
@@ -328,6 +343,10 @@ class ChoreographerDeps:
     # Optional so existing callsites that don't exercise the rate-limit path
     # don't have to plumb it in.
     stream_bus: Any = None
+    # ReviewArtifactService for the local review workflow (patch artifacts
+    # instead of branches and pull requests). Optional like its siblings; a
+    # local-review task with none wired refuses with a clear envelope.
+    review_artifacts: Any = None
 
 
 @dataclass(frozen=True)
@@ -490,6 +509,10 @@ class Choreographer:
     @property
     def stream_bus(self) -> Any:
         return self._deps.stream_bus
+
+    @property
+    def review_artifacts(self) -> Any:
+        return self._deps.review_artifacts
 
     async def _touch(self, task_id: UUID | None) -> None:
         """Best-effort heartbeat write; silent on missing task."""
@@ -2583,6 +2606,8 @@ class Choreographer:
         briefing = await self._briefing_for(agent_id, task_id, task=t)
         agent = await self.task.agent_for(agent_id)
         role_str = str(agent.role) if agent is not None else "developer"
+        if is_local_review(t):
+            return await self._open_local_review(agent_id, task_id, t, agent, briefing)
         # Idempotent re-entry: caller owns the task and a PR is already
         # open. The spec would otherwise reject with PRECONDITION_NO_PR
         # tracing_gap, but agents calling open_pr twice should get the
@@ -2628,6 +2653,121 @@ class Choreographer:
         return await self._open_pr_success_envelope(
             agent_id, task_id, t, briefing, role_str
         )
+
+    async def _open_local_review(
+        self,
+        agent_id: UUID,
+        task_id: UUID,
+        t: Any,
+        agent: Any,
+        briefing: dict[str, Any],
+    ) -> Envelope:
+        """``open_pr`` for a local review task: capture the patch artifact.
+
+        The same spec gate (role, ownership, open state) runs first; then the
+        workspace changes become the task's review artifact. Nothing is pushed,
+        no pull request is opened and no forge is contacted. Re-calling with
+        unchanged work returns the existing artifact.
+        """
+        role_str = str(agent.role) if agent is not None else "developer"
+        spec_ctx = spec_module.Context(
+            actor_id=agent_id,
+            actor_slug=getattr(agent, "slug", None) if agent is not None else None,
+            agent_team=str(agent.team) if agent is not None and agent.team else None,
+            original_developer_slug=_extract_original_developer(t),
+        )
+        rejection = await self._open_local_review_preflight(
+            agent_id, task_id, t, role_str, briefing, spec_ctx
+        )
+        if rejection is None:
+            rejection = await self._capture_review_artifact(
+                agent_id, t, role_str, briefing
+            )
+        if rejection is not None:
+            return await self._emit_rejection(
+                rejection, agent_id=agent_id, task_id=task_id, verb="open_pr"
+            )
+        await self._touch(task_id)
+        refreshed = await self.task.get(task_id)
+        t = refreshed if refreshed is not None else t
+        artifact = await self.review_artifacts.current_for(t)
+        await self._record_milestone_progress(
+            task_id,
+            agent_id,
+            f"captured review artifact {artifact_label(artifact.id, artifact.sha256)}",
+            percentage=70,
+        )
+        return Envelope.ok(
+            status=str(t.status),
+            task_id=str(task_id),
+            next=(
+                f"review artifact {artifact_label(artifact.id, artifact.sha256)} "
+                "captured; call i_am_done(task_id, notes='...') when self-verified"
+            ),
+            context_briefing=briefing,
+        ).with_introspection(task=t, role=role_str)
+
+    async def _open_local_review_preflight(
+        self,
+        agent_id: UUID,
+        task_id: UUID,
+        t: Any,
+        role_str: str,
+        briefing: dict[str, Any],
+        spec_ctx: Any,
+    ) -> Envelope | None:
+        """Role, reassignment and spec-gate checks, minus the forge topology."""
+        try:
+            role = spec_module.Role(role_str)
+        except ValueError:
+            return Envelope.not_authorized(
+                message=f"unknown role '{role_str}'",
+                remediate="role is not declared in the lifecycle spec",
+                context_briefing=briefing,
+            ).with_introspection(task=t, role=role_str)
+        decision = spec_module.can_invoke_intent(role, "open_pr", t, spec_ctx)
+        if not decision.allowed:
+            return Envelope.from_decision(
+                decision, briefing=briefing
+            ).with_introspection(task=t, role=role_str)
+        return None
+
+    async def _capture_review_artifact(
+        self, agent_id: UUID, t: Any, role_str: str, briefing: dict[str, Any]
+    ) -> Envelope | None:
+        """Capture the artifact; map every refusal to a fail-closed envelope."""
+        if self.review_artifacts is None:
+            return Envelope.invalid_state(
+                message="local review is not available in this deployment",
+                remediate="ask the owner to check the worker configuration",
+                context_briefing=briefing,
+            ).with_introspection(task=t, role=role_str)
+        try:
+            await self.review_artifacts.capture(t, agent_id=agent_id)
+        except ReviewArtifactRefused as exc:
+            logger.warning(
+                "review_artifact_refused", task_id=str(t.id), reason=exc.reason_code
+            )
+            return Envelope.invalid_state(
+                message=f"your changes cannot be captured: {exc.reason_code}",
+                remediate=_ARTIFACT_REFUSAL_REMEDIATION.get(
+                    exc.reason_code,
+                    "fix the reported problem in your workspace and call open_pr again",
+                ),
+                context_briefing=briefing,
+            ).with_introspection(task=t, role=role_str)
+        except ProjectExecutionUnavailable as exc:
+            logger.warning(
+                "review_artifact_worker_unavailable",
+                task_id=str(t.id),
+                reason=exc.reason_code,
+            )
+            return Envelope.invalid_state(
+                message=f"the offline worker is unavailable: {exc.reason_code}",
+                remediate="retry open_pr shortly; if it persists, call i_am_blocked",
+                context_briefing=briefing,
+            ).with_introspection(task=t, role=role_str)
+        return None
 
     async def _open_pr_preflight_rejection(
         self,
@@ -3071,8 +3211,7 @@ class Choreographer:
             lambda: self._check_submit_qa_field_gates(
                 ctx.agent_id, ctx.task_id, ctx.task
             ),
-            lambda: self._ensure_branch_pushed(ctx),
-            lambda: self._behind_base_gate(ctx),
+            lambda: self._publish_changes_guard(ctx),
             lambda: self._check_quality_gate(ctx),
             lambda: self._conventions_gate(ctx),
         )
@@ -3084,6 +3223,21 @@ class Choreographer:
         # verdict so it cannot change i_am_done's rejection behavior.
         await self._write_criteria_status(ctx.agent_id, ctx.task_id, ctx.task)
         return None
+
+    async def _publish_changes_guard(self, ctx: _IAmDoneContext) -> Envelope | None:
+        """Make the submitted work reviewable: push it, or capture it locally.
+
+        A forge task pushes its branch and must not be behind its base. A local
+        review task re-captures its artifact so QA reviews the final state of the
+        workspace, never an earlier snapshot; unchanged work keeps its artifact.
+        """
+        if not is_local_review(ctx.task):
+            return await self._ensure_branch_pushed(
+                ctx
+            ) or await self._behind_base_gate(ctx)
+        return await self._capture_review_artifact(
+            ctx.agent_id, ctx.task, "developer", ctx.briefing
+        )
 
     async def _check_quality_gate(self, ctx: _IAmDoneContext) -> Envelope | None:
         """Run the project's fast quality gate (lint + typecheck) in the
@@ -3350,6 +3504,10 @@ class Choreographer:
         ``VerbRunner.run_intent`` so the PR-waiver check reuses this same
         probe's fetch instead of running its own.
         """
+        if is_local_review(t):
+            # No branch exists to check or sync; the assembled work is the
+            # accepted artifacts already folded into the workspace baseline.
+            return None, None
         guard = await self._assembly_integrity_guard(t, verb=verb)
         if guard is not None:
             return guard, None
@@ -3886,8 +4044,7 @@ class Choreographer:
             ),
             # Push-first, mirroring the standard gate: _behind_base_gate reads
             # origin, which must already reflect the pushed head.
-            lambda: self._ensure_branch_pushed(ctx),
-            lambda: self._behind_base_gate(ctx),
+            lambda: self._publish_changes_guard(ctx),
             lambda: self._conventions_gate(ctx),
         )
         for guard in guards:
@@ -4439,18 +4596,26 @@ class Choreographer:
         # the in_progress → verifying transition which sets it. The previous
         # NOT_SELF_VERIFIED gate required a separate submit_for_verification
         # verb that wasn't on any manifest.
-        if not t.commits:
-            missing.append("NO_COMMITS")
-            hints.append(
-                "no commits on this task yet — call commit(message='<subject>')"
-                " before i_am_done"
-            )
-        if t.pr_number is None:
-            missing.append("NO_PR")
-            hints.append(
-                "no PR open — call open_pr(task_id) to push your"
-                " branch and open the PR, then retry i_am_done"
-            )
+        if is_local_review(t):
+            if t.review_artifact_id is None:
+                missing.append("NO_REVIEW_ARTIFACT")
+                hints.append(
+                    "your changes are not captured for review — call"
+                    " open_pr(task_id), then retry i_am_done"
+                )
+        else:
+            if not t.commits:
+                missing.append("NO_COMMITS")
+                hints.append(
+                    "no commits on this task yet — call commit(message='<subject>')"
+                    " before i_am_done"
+                )
+            if t.pr_number is None:
+                missing.append("NO_PR")
+                hints.append(
+                    "no PR open — call open_pr(task_id) to push your"
+                    " branch and open the PR, then retry i_am_done"
+                )
         if not missing:
             return None
         return Envelope.tracing_gap(
@@ -8529,7 +8694,7 @@ class Choreographer:
             pm_agent_id, task_id, context_phrase="bubbling up"
         ):
             return env
-        if not t.branch_name:
+        if not t.branch_name and not is_local_review(t):
             return Envelope.invalid_state(
                 message="task has no branch; cannot open cell-level PR",
                 remediate="cell PMs must claim+plan their parent task first",
@@ -9035,7 +9200,11 @@ class Choreographer:
         # A PR-waived task (zero commits relative to its parent — report-only
         # work the verb runner skipped create_pr for) legitimately has no PR
         # to merge; every other task must have one by this point.
-        if t.pr_number is None and not markers.is_pr_waived(t):
+        if (
+            t.pr_number is None
+            and not markers.is_pr_waived(t)
+            and not is_local_review(t)
+        ):
             return Envelope.invalid_state(
                 message="task has no PR; cannot merge",
                 remediate=(
@@ -9212,6 +9381,10 @@ class Choreographer:
             verb="cell_pm_complete",
         ):
             return stamp_rejection
+        if is_local_review(t):
+            return await self._accept_local_review_and_complete(
+                pm_agent_id, task_id, t, notes
+            )
         # Resolve the merge target from the PARENT task's real
         # branch_name. For a leaf this is the cell branch (same team — no
         # change); for a cell task it is the root branch (feature/main_pm/…),
@@ -9253,6 +9426,49 @@ class Choreographer:
         return await self._finalize_cell_complete(
             pm_agent_id, task_id, t, notes, merge_commit
         )
+
+    async def _accept_local_review_and_complete(
+        self, pm_agent_id: UUID, task_id: UUID, t: Any, notes: str
+    ) -> Envelope:
+        """Complete a local review task: accept its artifact instead of merging.
+
+        An assembly (a task with subtasks) owns no artifact: its leaves' accepted
+        artifacts are the work, so there is nothing to accept or merge.
+        Acceptance records the new workspace baseline in the offline worker, so
+        the next task's changes are measured from here. If the worker cannot
+        record it the artifact stays open and the task is not completed.
+        """
+        if await self.task.get_subtasks(task_id):
+            return await self._finalize_cell_complete(
+                pm_agent_id, task_id, t, notes, None
+            )
+        if self.review_artifacts is None:
+            return Envelope.invalid_state(
+                message="local review is not available in this deployment",
+                remediate="ask the owner to check the worker configuration",
+                context_briefing=await self._briefing_for(pm_agent_id, task_id),
+            )
+        try:
+            await self.review_artifacts.accept(t)
+        except (ReviewArtifactRefused, ProjectExecutionUnavailable) as exc:
+            reason = getattr(exc, "reason_code", "unavailable")
+            logger.warning(
+                "review_artifact_accept_failed", task_id=str(task_id), reason=reason
+            )
+            return await self._emit_rejection(
+                Envelope.invalid_state(
+                    message=f"the review artifact cannot be accepted: {reason}",
+                    remediate=(
+                        "retry complete shortly; if it persists, send the task"
+                        " back with request_changes so it is captured again"
+                    ),
+                    context_briefing=await self._briefing_for(pm_agent_id, task_id),
+                ).with_introspection(task=t, role="cell_pm"),
+                agent_id=pm_agent_id,
+                task_id=task_id,
+                verb="cell_pm_complete",
+            )
+        return await self._finalize_cell_complete(pm_agent_id, task_id, t, notes, None)
 
     async def _finalize_cell_complete(
         self,
