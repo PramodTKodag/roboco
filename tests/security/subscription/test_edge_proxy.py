@@ -28,7 +28,8 @@ NGINX_IMAGE = (
 )
 ECHO_IMAGE = "python:3.13-slim-bookworm"
 PERSONAL = REPO_ROOT / "deploy" / "personal"
-OWNER_HOST = "localhost:3000"
+EDGE_PORT = "3300"
+OWNER_HOST = f"localhost:{EDGE_PORT}"
 
 _ECHO_SERVER = (
     "import json,sys\n"
@@ -88,7 +89,9 @@ def edge_port() -> Iterator[int]:
         docker(
             "run", "-d", "--rm", "--name", edge, "--network", network,
             "-p", "127.0.0.1::80",
-            "-v", f"{PERSONAL / 'nginx.conf'}:/etc/nginx/conf.d/default.conf:ro",
+            "-e", f"ROBOCO_PERSONAL_PORT={EDGE_PORT}",
+            "-e", "NGINX_ENVSUBST_FILTER=^ROBOCO_",
+            "-v", f"{PERSONAL / 'nginx.conf'}:/etc/nginx/templates/default.conf.template:ro",
             "-v", f"{PERSONAL / 'nginx-proxy-common.conf'}:/etc/nginx/personal/nginx-proxy-common.conf:ro",
             NGINX_IMAGE,
         )  # fmt: skip

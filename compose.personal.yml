@@ -1,18 +1,31 @@
-# Personal deployment. This file defines the network boundary every model
-# request depends on; the remaining services attach to the `runtime` network.
+# Personal deployment: the only supported way to run this fork.
 #
+#   edge    : the one network with a published port (127.0.0.1:3000 -> nginx).
 #   runtime : internal (no route out, no outside DNS, no IPv6, no host gateway).
-#             The model runtime joins only this network.
+#             Controller, panel, model runtime and launcher live here.
+#   data    : internal. Database and Redis, reachable only by the controller.
 #   egress  : the only network with an outside route. Only the proxy joins it.
 #
-# Workers never join either network: the launcher starts them with `--network
-# none`. The proxy is the single process that can reach the provider, and it
-# forwards only what the reviewed policy in deploy/personal allows.
+# Credentials: the subscription login lives in the `claude_credentials` volume,
+# mounted into the model runtime alone. Workers never join a network: the
+# launcher starts them with `--network none`. The proxy is the single process
+# that can reach the provider, and it forwards only what the reviewed policy in
+# deploy/personal allows. The Docker socket is mounted into the launcher alone.
+#
+# Start it with `make personal-up`; it generates the secrets and the values this
+# file requires. Running `docker compose` on this file directly is unsupported.
 
 name: roboco-personal
 
 networks:
+  edge:
+    driver: bridge
+    enable_ipv6: false
   runtime:
+    internal: true
+    driver: bridge
+    enable_ipv6: false
+  data:
     internal: true
     driver: bridge
     enable_ipv6: false
@@ -25,6 +38,94 @@ volumes:
   egress_ca_private:
   # Public certificate only; mounted read-only into the model runtime.
   egress_ca_public:
+  # The subscription login. Mounted into the model runtime only.
+  claude_credentials:
+  postgres_data:
+  redis_data:
+  # Controller state shared by the API and dispatcher processes.
+  controller_data:
+  controller_mcp_configs:
+  controller_vault:
+  controller_prompts:
+  controller_agent_settings:
+  controller_briefings:
+  controller_manifests:
+
+# Bearer tokens are files so they never appear in `docker inspect` or an
+# environment dump. Each service mounts only the tokens it needs.
+secrets:
+  claude_service_token:
+    file: ${ROBOCO_PERSONAL_STATE:?run through make personal-up}/secrets/claude_service_token
+  launcher_admin_token:
+    file: ${ROBOCO_PERSONAL_STATE}/secrets/launcher_admin_token
+  launcher_executor_token:
+    file: ${ROBOCO_PERSONAL_STATE}/secrets/launcher_executor_token
+
+x-hardened: &hardened
+  restart: unless-stopped
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+x-controller-env: &controller-env
+  ROBOCO_ENVIRONMENT: production
+  ROBOCO_HOST: 0.0.0.0
+  ROBOCO_PORT: "8000"
+  # The model runtime's verb servers call the dispatcher, which holds the
+  # in-memory run scope; service names are the only hosts the API answers to.
+  ROBOCO_API_URL: http://dispatcher:8000
+  # 127.0.0.1:8000 is the container's own loopback (healthcheck, startup probe):
+  # unreachable from any other container or from the host.
+  ROBOCO_ALLOWED_HOSTS: '["localhost:${ROBOCO_PERSONAL_PORT:-3300}","127.0.0.1:${ROBOCO_PERSONAL_PORT:-3300}","orchestrator:8000","dispatcher:8000","127.0.0.1:8000"]'
+  ROBOCO_DATABASE_HOST: postgres
+  ROBOCO_DATABASE_PORT: "5432"
+  ROBOCO_DATABASE_USER: roboco
+  ROBOCO_DATABASE_NAME: roboco
+  ROBOCO_DATABASE_PASSWORD: ${ROBOCO_DATABASE_PASSWORD:?run through make personal-up}
+  ROBOCO_REDIS_HOST: redis
+  ROBOCO_REDIS_PORT: "6379"
+  ROBOCO_ENCRYPTION_KEY: ${ROBOCO_ENCRYPTION_KEY:?run through make personal-up}
+  ROBOCO_AGENT_AUTH_SECRET: ${ROBOCO_AGENT_AUTH_SECRET:?run through make personal-up}
+  ROBOCO_AGENT_AUTH_REQUIRED: "true"
+  ROBOCO_CLOUD_AUTH_ENABLED: "true"
+  ROBOCO_CLOUD_AUTH_EMAIL: ${ROBOCO_CLOUD_AUTH_EMAIL:?run through make personal-up}
+  ROBOCO_CLOUD_AUTH_PASSWORD: ${ROBOCO_CLOUD_AUTH_PASSWORD:?run through make personal-up}
+  ROBOCO_CLOUD_AUTH_SECRET: ${ROBOCO_CLOUD_AUTH_SECRET:?run through make personal-up}
+  ROBOCO_WORKSPACES_ROOT: /data/workspaces
+  # Agents are model runs behind the subscription runtime; the controller has
+  # no Docker CLI or socket, so container-only startup steps are skipped.
+  ROBOCO_CONTAINER_RUNTIME_ENABLED: "false"
+  ROBOCO_CLAUDE_SERVICE_HOST: claude-service
+  ROBOCO_CLAUDE_SERVICE_PORT: "8766"
+  ROBOCO_CLAUDE_SERVICE_TOKEN_FILE: /run/secrets/claude_service_token
+  ROBOCO_LAUNCHER_HOST: launcher
+  ROBOCO_LAUNCHER_PORT: "8765"
+  ROBOCO_LAUNCHER_ADMIN_TOKEN_FILE: /run/secrets/launcher_admin_token
+  ROBOCO_LAUNCHER_EXECUTOR_TOKEN_FILE: /run/secrets/launcher_executor_token
+
+x-controller: &controller
+  <<: *hardened
+  image: roboco-personal-controller:${ROBOCO_PERSONAL_TAG:-local}
+  build:
+    context: .
+    dockerfile: docker/controller.Dockerfile
+  read_only: true
+  tmpfs: ["/tmp"]
+  networks: [runtime, data]
+  secrets: [claude_service_token, launcher_admin_token, launcher_executor_token]
+  volumes:
+    - controller_data:/data
+    - controller_mcp_configs:/app/mcp-configs
+    - controller_vault:/app/vault
+    - controller_prompts:/app/prompts-generated
+    - controller_agent_settings:/app/agent-settings
+    - controller_briefings:/app/briefings
+    - controller_manifests:/app/manifests
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+    interval: 10s
+    timeout: 5s
+    retries: 10
+    start_period: 90s
 
 services:
   egress-proxy:
@@ -37,7 +138,8 @@ services:
     tmpfs: ["/tmp"]
     environment:
       ROBOCO_EGRESS_POLICY_PATH: /opt/egress/egress-policy.json
-      ROBOCO_EGRESS_PROFILE: normal
+      # `normal` always; `make personal-login` switches it for the login window.
+      ROBOCO_EGRESS_PROFILE: ${ROBOCO_EGRESS_PROFILE:-normal}
       # Injected by `make personal-up` from deploy/personal/egress-policy.sha256;
       # a missing or different digest refuses startup.
       ROBOCO_EGRESS_POLICY_SHA256: ${ROBOCO_EGRESS_POLICY_SHA256:?reviewed policy digest required}
@@ -79,3 +181,164 @@ services:
       egress-proxy:
         condition: service_healthy
     restart: "no"
+
+  postgres:
+    image: pgvector/pgvector:pg16@sha256:484e838076e04939d27d3e176e91c86eea96236126023be8d3059761122e579f
+    restart: unless-stopped
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
+    # The image starts as root to prepare the data directory, then drops to the
+    # postgres user; those are the only capabilities that step needs.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    security_opt: ["no-new-privileges:true"]
+    networks: [data]
+    environment:
+      POSTGRES_USER: roboco
+      POSTGRES_DB: roboco
+      POSTGRES_PASSWORD: ${ROBOCO_DATABASE_PASSWORD:?run through make personal-up}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U roboco -d roboco"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:8-alpine@sha256:7958cfbb9d152f87dadfbc89f1b0b15938f0b81ff8982feb327476f4911935c3
+    <<: *hardened
+    command: ["redis-server", "--appendonly", "yes"]
+    # The entrypoint takes ownership of /data, then drops to the redis user.
+    cap_add: [CHOWN, SETUID, SETGID]
+    # Redis has no password: the internal `data` network is its containment.
+    networks: [data]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  orchestrator:
+    <<: *controller
+    environment:
+      <<: *controller-env
+      ROBOCO_ROLE: api
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+
+  dispatcher:
+    <<: *controller
+    environment:
+      <<: *controller-env
+      ROBOCO_ROLE: dispatcher
+    depends_on:
+      orchestrator: {condition: service_healthy}
+
+  panel:
+    <<: *hardened
+    image: roboco-personal-panel:${ROBOCO_PERSONAL_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/panel.Dockerfile
+    read_only: true
+    tmpfs: ["/tmp", "/app/.next/cache"]
+    networks: [runtime]
+    environment:
+      INTERNAL_API_URL: http://orchestrator:8000/api
+    depends_on:
+      orchestrator: {condition: service_healthy}
+
+  # The trusted model runtime: the only service that holds the subscription
+  # login. No Docker socket, no project code, no provider key.
+  claude-service:
+    <<: *hardened
+    image: roboco-personal-claude-service:${ROBOCO_PERSONAL_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/claude-subscription.Dockerfile
+      additional_contexts:
+        cli: ${ROBOCO_CLI_CONTEXT:?run through make personal-up}
+      args:
+        CLAUDE_CLI_SHA256: ${ROBOCO_CLI_SHA256:?run through make personal-up}
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run/roboco:mode=0700,uid=10002,gid=10002,size=64m
+    networks: [runtime]
+    secrets: [claude_service_token, launcher_executor_token]
+    environment:
+      ROBOCO_CLAUDE_SERVICE_HOST: 0.0.0.0
+      ROBOCO_CLAUDE_SERVICE_ALLOW_NON_LOOPBACK: "1"
+      ROBOCO_CLAUDE_SERVICE_PORT: "8766"
+      ROBOCO_CLAUDE_SERVICE_TOKEN_FILE: /run/secrets/claude_service_token
+      ROBOCO_LAUNCHER_HOST: launcher
+      ROBOCO_LAUNCHER_PORT: "8765"
+      ROBOCO_LAUNCHER_EXECUTOR_TOKEN_FILE: /run/secrets/launcher_executor_token
+      ROBOCO_ORCHESTRATOR_URL: http://dispatcher:8000
+      ROBOCO_EGRESS_PROXY_URL: http://egress-proxy:8080
+      ROBOCO_EGRESS_CA_FILE: /etc/roboco/egress/mitmproxy-ca-cert.pem
+    volumes:
+      - claude_credentials:/home/claude/.claude
+      - egress_ca_public:/etc/roboco/egress:ro
+    depends_on:
+      egress-ca-publish: {condition: service_completed_successfully}
+      launcher: {condition: service_started}
+
+  # The only service with the Docker socket. It starts offline workers from a
+  # fixed argv and has no model credential.
+  launcher:
+    <<: *hardened
+    image: roboco-personal-launcher:${ROBOCO_PERSONAL_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/launcher.Dockerfile
+    user: "0:0"
+    read_only: true
+    tmpfs: ["/tmp"]
+    networks: [runtime]
+    secrets: [launcher_admin_token, launcher_executor_token]
+    environment:
+      ROBOCO_LAUNCHER_HOST: 0.0.0.0
+      ROBOCO_LAUNCHER_ALLOW_NON_LOOPBACK: "1"
+      ROBOCO_LAUNCHER_PORT: "8765"
+      ROBOCO_LAUNCHER_ADMIN_TOKEN_FILE: /run/secrets/launcher_admin_token
+      ROBOCO_LAUNCHER_EXECUTOR_TOKEN_FILE: /run/secrets/launcher_executor_token
+      # The built worker image's ID, injected by `make personal-up`.
+      ROBOCO_WORKER_IMAGE: ${ROBOCO_WORKER_IMAGE:?run through make personal-up}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  # Builds the credential-free worker image. It is never run as a service; the
+  # launcher starts it per job with no network.
+  worker-image:
+    image: roboco-personal-worker:${ROBOCO_PERSONAL_TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/task-worker.Dockerfile
+    profiles: ["build"]
+
+  # The one published port, bound to loopback.
+  nginx:
+    image: nginx:1.29-alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+    <<: *hardened
+    cap_add: [CHOWN, SETGID, SETUID, NET_BIND_SERVICE, DAC_OVERRIDE]
+    read_only: true
+    tmpfs: ["/tmp", "/var/cache/nginx", "/var/run", "/etc/nginx/conf.d"]
+    ports:
+      - "127.0.0.1:${ROBOCO_PERSONAL_PORT:-3300}:80"
+    networks: [edge, runtime]
+    environment:
+      # Rendered into the config template by the image's envsubst entrypoint;
+      # the filter limits substitution to ROBOCO_* so nginx's own variables stay.
+      ROBOCO_PERSONAL_PORT: ${ROBOCO_PERSONAL_PORT:-3300}
+      NGINX_ENVSUBST_FILTER: "^ROBOCO_"
+    volumes:
+      - ./deploy/personal/nginx.conf:/etc/nginx/templates/default.conf.template:ro
+      - ./deploy/personal/nginx-proxy-common.conf:/etc/nginx/personal/nginx-proxy-common.conf:ro
+    depends_on:
+      panel: {condition: service_started}
+      orchestrator: {condition: service_healthy}
+      dispatcher: {condition: service_healthy}
