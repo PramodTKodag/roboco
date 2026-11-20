@@ -63,7 +63,7 @@ def _pin_verdict(
     async def _mode(_session: object, _pilot: str) -> pilots.PilotMode:
         return mode
 
-    async def _resolve(_session: object) -> MagicMock:
+    async def _resolve() -> MagicMock:
         return endpoint
 
     decide = AsyncMock(return_value=result)

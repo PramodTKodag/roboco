@@ -5,8 +5,13 @@ from __future__ import annotations
 import os
 from unittest import mock
 
+import pytest
 from roboco.config import Settings
-from roboco.services.settings import FEATURE_FLAGS, validate_setting
+from roboco.services.settings import (
+    FEATURE_FLAGS,
+    SettingValidationError,
+    validate_setting,
+)
 
 _DEFAULT_INTERVAL = 1800
 _DEFAULT_MAX_OPEN = 3
@@ -31,5 +36,7 @@ def test_ci_watch_flag_registered_in_feature_flags() -> None:
     assert "ci_watch_enabled" in [key for key, _ in FEATURE_FLAGS]
 
 
-def test_ci_watch_flag_validates_as_bool() -> None:
-    validate_setting("ci_watch_enabled", "true")
+def test_ci_watch_flag_is_locked_off_by_policy() -> None:
+    validate_setting("ci_watch_enabled", "false")
+    with pytest.raises(SettingValidationError):
+        validate_setting("ci_watch_enabled", "true")

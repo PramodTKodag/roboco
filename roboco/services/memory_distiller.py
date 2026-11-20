@@ -15,6 +15,7 @@ import httpx
 import structlog
 
 from roboco.config import settings
+from roboco.llm.direct_clients import require_direct_model_clients
 
 logger = structlog.get_logger()
 
@@ -61,6 +62,7 @@ def _build_prompt(snapshot: LessonInput) -> str:
 
 async def _chat(prompt: str) -> str | None:
     """One local-LLM chat call (OpenAI-compatible); None on a non-success."""
+    require_direct_model_clients()
     async with httpx.AsyncClient(timeout=_CHAT_TIMEOUT_SECONDS) as client:
         resp = await client.post(
             f"{settings.local_llm_base_url}/chat/completions",

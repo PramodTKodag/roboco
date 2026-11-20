@@ -5,8 +5,13 @@ from __future__ import annotations
 import os
 from unittest import mock
 
+import pytest
 from roboco.config import Settings
-from roboco.services.settings import FEATURE_FLAGS, validate_setting
+from roboco.services.settings import (
+    FEATURE_FLAGS,
+    SettingValidationError,
+    validate_setting,
+)
 
 _DEFAULT_MIN_COMMITS = 8
 _DEFAULT_INTERVAL = 3600
@@ -34,5 +39,7 @@ def test_release_manager_flag_registered_in_feature_flags() -> None:
     assert "release_manager_enabled" in [key for key, _ in FEATURE_FLAGS]
 
 
-def test_release_manager_flag_validates_as_bool() -> None:
-    validate_setting("release_manager_enabled", "true")
+def test_release_manager_flag_is_locked_off_by_policy() -> None:
+    validate_setting("release_manager_enabled", "false")
+    with pytest.raises(SettingValidationError):
+        validate_setting("release_manager_enabled", "true")

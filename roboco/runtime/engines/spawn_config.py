@@ -31,6 +31,7 @@ from roboco.runtime.orchestrator import (
     logger,
 )
 from roboco.seeds.initial_data import AGENT_UUIDS
+from roboco.services.optimal_brain.availability import semantic_kb_available
 
 if TYPE_CHECKING:
     from roboco.models.runtime import (
@@ -681,8 +682,13 @@ class SpawnConfigEngine(_Base):
                 "args": ["run", "--no-sync", "python", "-m", "roboco.mcp.git_readonly"],
                 "env": mcp_env,
             },
-            # Knowledge base — RAG / semantic search / ask_mentor.
-            "roboco-optimal": {
+        }
+
+        # Knowledge base — RAG / semantic search / ask_mentor. Mounted only when
+        # the policy lets the semantic KB run; otherwise the tools would only
+        # ever answer feature_unavailable.
+        if semantic_kb_available():
+            mcp_servers["roboco-optimal"] = {
                 "command": "uv",
                 "args": [
                     "run",
@@ -693,8 +699,7 @@ class SpawnConfigEngine(_Base):
                     agent_uuid,
                 ],
                 "env": mcp_env,
-            },
-        }
+            }
 
         video_authoring = await self._is_video_authoring_spawn(
             agent_id, agent_role, task_id

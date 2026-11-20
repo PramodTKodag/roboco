@@ -36,6 +36,10 @@ import structlog
 from roboco.config import settings
 from roboco.events.stream_bus import StreamEventBus
 from roboco.models.events import Event, EventType
+from roboco.services.optimal_brain.availability import (
+    require_semantic_kb,
+    semantic_kb_available,
+)
 
 if TYPE_CHECKING:
     from roboco.services.optimal import OptimalService
@@ -103,6 +107,9 @@ async def enqueue_index_request(
     its own service instance (a test injecting a mock, a future per-request
     override) is honored on the inline path too.
     """
+    if not semantic_kb_available():
+        logger.debug("Semantic KB unavailable; index request dropped", kind=kind)
+        return
     if settings.indexer_stream_enabled:
         try:
             bus = _get_indexer_bus()
@@ -313,6 +320,7 @@ def _build_indexer_embedder() -> OllamaEmbedder:
     """
     from roboco.services.optimal_brain.ollama_embedder import OllamaEmbedder
 
+    require_semantic_kb()
     return OllamaEmbedder(
         model=settings.default_embedding_model,
         base_url=settings.ollama_base_url,
@@ -442,6 +450,9 @@ async def run_indexer(
     """
     from roboco.services.optimal import get_optimal_service
 
+    if not semantic_kb_available():
+        logger.info("Indexer worker not started: semantic KB unavailable by policy")
+        return
     if dedicated_embedder:
         from roboco.services.optimal_brain.shared_embedder import (
             set_shared_embedder,

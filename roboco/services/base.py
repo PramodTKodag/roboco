@@ -108,6 +108,23 @@ class ServiceUnavailableError(ServiceError):
         self.reason = reason
 
 
+class FeatureUnavailableError(ServiceUnavailableError):
+    """A feature the subscription-only policy keeps off. Translates to 503.
+
+    Distinct from a transient outage: nothing will make it succeed until the
+    feature is deliberately re-enabled, so callers must not retry or substitute
+    an empty result.
+    """
+
+    def __init__(self, feature: str, reason: str) -> None:
+        super().__init__(
+            feature,
+            reason,
+            details={"code": "feature_unavailable", "feature": feature},
+        )
+        self.feature = feature
+
+
 # =============================================================================
 # BASE SERVICE CLASSES
 # =============================================================================

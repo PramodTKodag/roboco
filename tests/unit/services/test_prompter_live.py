@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import time
 
-import httpx
 import pytest
 import roboco.services.prompter_live as pl
 from roboco.services.prompter_live import (
@@ -188,37 +186,29 @@ async def test_stream_unknown_session_is_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deliver_posts_to_the_container_receiver() -> None:
-    seen: dict[str, object] = {}
+async def test_deliver_hands_the_message_to_the_turn_handler() -> None:
+    seen: list[tuple[str, str]] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["host"] = request.url.host
-        seen["path"] = request.url.path
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(200, json={"ok": True})
+    def handler(session_id: str, text: str) -> bool:
+        seen.append((session_id, text))
+        return True
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    reg = PrompterLiveRegistry(http_client=client)
+    reg = PrompterLiveRegistry()
+    reg.set_turn_handler(handler)
     reg.open("s1", "intake-1")
 
     assert await reg.deliver("s1", "hello there") is True
-    assert seen["host"] == "roboco-agent-intake-1"
-    assert seen["path"] == "/turn"
-    assert seen["body"] == {"text": "hello there"}
-    await client.aclose()
+    assert seen == [("s1", "hello there")]
 
 
 @pytest.mark.asyncio
-async def test_deliver_to_unknown_or_failing_returns_false() -> None:
-    def fail(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500)
-
-    client = httpx.AsyncClient(transport=httpx.MockTransport(fail))
-    reg = PrompterLiveRegistry(http_client=client)
+async def test_deliver_fails_closed_without_a_session_or_a_handler() -> None:
+    reg = PrompterLiveRegistry()
     assert await reg.deliver("nope", "hi") is False  # unknown session
     reg.open("s1", "intake-1")
-    assert await reg.deliver("s1", "hi") is False  # 500 from container
-    await client.aclose()
+    assert await reg.deliver("s1", "hi") is False  # no handler registered
+    reg.set_turn_handler(lambda _sid, _text: False)
+    assert await reg.deliver("s1", "hi") is False  # handler declined
 
 
 def test_has_live_agent_tracks_any_session_for_that_agent() -> None:

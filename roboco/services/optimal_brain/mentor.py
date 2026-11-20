@@ -25,6 +25,7 @@ import httpx
 import structlog
 
 from roboco.config import settings
+from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models.base import AgentRole
 from roboco.models.optimal import (
     IndexType,
@@ -735,6 +736,7 @@ class MentorService:
         respecting the Retry-After header.  Each individual attempt is bounded by
         a 120-second asyncio timeout so a slow model cannot block the loop.
         """
+        require_direct_model_clients()
         import asyncio
 
         if not sources and not journal_context:

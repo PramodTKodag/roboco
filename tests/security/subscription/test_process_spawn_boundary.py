@@ -80,7 +80,6 @@ ALLOWED_SPAWN_SITES: dict[str, str] = {
     "roboco/llm/providers/grok.py": LEGACY,
     "roboco/llm/providers/kimi.py": LEGACY,
     "roboco/llm/providers/nebius.py": LEGACY,
-    "roboco/runtime/engines/interactive_sessions.py": LEGACY,
 }
 REMOVAL_PENDING = frozenset({HOST_GIT, LEGACY})
 

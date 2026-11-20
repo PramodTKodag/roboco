@@ -5,8 +5,13 @@ from __future__ import annotations
 import os
 from unittest import mock
 
+import pytest
 from roboco.config import Settings
-from roboco.services.settings import FEATURE_FLAGS, validate_setting
+from roboco.services.settings import (
+    FEATURE_FLAGS,
+    SettingValidationError,
+    validate_setting,
+)
 
 
 def test_docs_sync_disabled_by_default() -> None:
@@ -23,5 +28,7 @@ def test_docs_sync_flag_registered_in_feature_flags() -> None:
     assert "docs_sync_enabled" in [key for key, _ in FEATURE_FLAGS]
 
 
-def test_docs_sync_flag_validates_as_bool() -> None:
-    validate_setting("docs_sync_enabled", "true")
+def test_docs_sync_flag_is_locked_off_by_policy() -> None:
+    validate_setting("docs_sync_enabled", "false")
+    with pytest.raises(SettingValidationError):
+        validate_setting("docs_sync_enabled", "true")

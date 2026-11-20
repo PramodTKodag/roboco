@@ -14,6 +14,7 @@ from typing import Any
 import structlog
 
 from roboco.config import settings
+from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models.optimal import IndexType, SearchOutcome, SearchResult
 from roboco.services.exceptions import (
     HTTP_TOO_MANY_REQUESTS,
@@ -997,6 +998,7 @@ class BaseIndexPlugin(ABC):
         Returns ``(answer, citations)``; ``("", citations)`` on any non-429
         failure. Raises RateLimitError only when every 429 retry is exhausted.
         """
+        require_direct_model_clients()
         import asyncio
 
         import httpx

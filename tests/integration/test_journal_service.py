@@ -485,6 +485,7 @@ async def test_create_entry_integrity_error_returns_none(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("semantic_kb_on")
 async def test_create_entry_learning_calls_record_learning(
     journal_setup: dict,
 ) -> None:
@@ -516,6 +517,7 @@ async def test_create_entry_learning_calls_record_learning(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("semantic_kb_on")
 async def test_nonprivate_entry_is_indexed_to_shared_corpus(
     journal_setup: dict,
 ) -> None:

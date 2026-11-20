@@ -62,6 +62,8 @@ _EMBED_PATH = (
 # Helpers
 # ---------------------------------------------------------------------------
 
+pytestmark = pytest.mark.usefixtures("direct_model_clients_on", "semantic_kb_on")
+
 
 def _make_response(
     status_code: int,

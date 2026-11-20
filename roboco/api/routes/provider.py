@@ -46,7 +46,6 @@ from roboco.api.utils.provider import (
     safe_float,
 )
 from roboco.billing.pricing import input_price_per_million
-from roboco.config import settings as roboco_settings
 from roboco.models.base import AssignmentScope, ModelProvider
 from roboco.models.llm_catalog import MODEL_CATALOG
 from roboco.models.runtime import ROLE_MODEL_MAP

@@ -26,6 +26,7 @@ import httpx
 from roboco.config import settings
 from roboco.foundation import identity as _foundation
 from roboco.foundation.policy.content import markers
+from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models.base import Complexity, TaskNature, TaskStatus, TaskType, Team
 from roboco.services.base import BaseService
 from roboco.services.company_goals import get_company_goals_service
@@ -104,6 +105,7 @@ async def _chat(prompt: str) -> str | None:
     Mirrors XEngine's identical helper, duplicated locally (rather than
     imported) so video_engine doesn't reach into another service's private
     internals."""
+    require_direct_model_clients()
     async with httpx.AsyncClient(timeout=_CHAT_TIMEOUT_SECONDS) as client:
         resp = await client.post(
             f"{settings.local_llm_base_url}/chat/completions",

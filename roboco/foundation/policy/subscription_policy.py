@@ -69,9 +69,45 @@ FORBIDDEN_ENV_NAMES: frozenset[str] = frozenset(
     }
 )
 
-# Features that route model or code traffic to a second provider. They can be
-# neither configured on nor persisted on.
-FORBIDDEN_FEATURE_FLAGS: tuple[str, ...] = ("token_factory_sandboxes_enabled",)
+# Features that send model or project traffic anywhere except the subscription
+# runtime: a second model provider, a direct local-model client, a third-party
+# service, or an unattended forge/social integration. They can be neither
+# configured on nor persisted on; the code stays, the switch is locked.
+FORBIDDEN_FEATURE_FLAGS: tuple[str, ...] = (
+    # second model provider / remote execution
+    "token_factory_sandboxes_enabled",
+    "cross_vendor_review_enabled",
+    # direct local-model clients (embeddings, drafting, classification)
+    "direct_model_clients_enabled",
+    "semantic_kb_enabled",
+    "rag_auto_update_enabled",
+    "indexer_stream_enabled",
+    "decisions_enabled",
+    "org_memory_enabled",
+    "vault_intake_enabled",
+    "vault_kb_enabled",
+    # third-party services
+    "research_enabled",
+    "provisioning_enabled",
+    "guard_telemetry_enabled",
+    "x_engine_enabled",
+    "x_replies_enabled",
+    "x_feature_spotlight_enabled",
+    "video_engine_enabled",
+    "telegram_enabled",
+    "telegram_inbound_enabled",
+    "telegram_miniapp_enabled",
+    # unattended forge integrations
+    "external_pr_enabled",
+    "internal_pr_enabled",
+    "self_heal_enabled",
+    "self_heal_originate_enabled",
+    "ci_watch_enabled",
+    "dep_update_enabled",
+    "env_sync_enabled",
+    "release_manager_enabled",
+    "docs_sync_enabled",
+)
 
 
 def forbidden_env_names(environ: Mapping[str, str]) -> list[str]:

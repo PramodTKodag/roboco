@@ -244,5 +244,3 @@ async def test_extract_skips_empty_segments_from_segmenter(
     result = await svc.extract(_ctx("Long enough content to bypass min length."))
     # Only the non-empty segment becomes a message.
     assert len(result.messages) == 1
-
-

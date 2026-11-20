@@ -17,7 +17,6 @@ from roboco.api.auth.routes import mount_cloud_auth
 from roboco.api.auth.seed import ensure_seed_user_startup
 from roboco.api.deps import _auth_required, get_orchestrator_or_none
 from roboco.api.middleware import setup_middleware
-from roboco.api.run_scope import RunScopeMiddleware
 from roboco.api.routes.a2a import router as a2a_router
 from roboco.api.routes.a2a import wellknown_router as a2a_wellknown_router
 from roboco.api.routes.agents import router as agents_router
@@ -76,12 +75,14 @@ from roboco.api.routes.video import router as video_router
 from roboco.api.routes.video import tiktok_router
 from roboco.api.routes.work_session import router as work_session_router
 from roboco.api.routes.x import router as x_router
+from roboco.api.run_scope import RunScopeMiddleware
 from roboco.api.websocket import router as ws_router
 from roboco.config import settings
 from roboco.db.base import close_db, get_session_factory, init_db
 from roboco.logging import get_logger, setup_logging
 from roboco.runtime.subscription.policy import validate_subscription_policy
 from roboco.security import apply_guard, guarded_lifespan
+from roboco.services.base import FeatureUnavailableError
 from roboco.services.extraction import ExtractionPipeline, ExtractionService
 from roboco.services.learning import get_learning_service
 from roboco.services.optimal import close_optimal_service, get_optimal_service
@@ -102,6 +103,27 @@ class _AppServices:
 
     transcription: TranscriptionService | None = None
     extraction: ExtractionPipeline | None = None
+
+
+async def _start_optimal_service(app: FastAPI) -> None:
+    """Initialize OptimalService (RAG), blocking until fully ready.
+
+    ``/health`` only returns 200 once RAG is operational or deliberately
+    unavailable. A policy lock is an expected state, not a failure.
+    """
+    try:
+        logger.info("Initializing OptimalService (RAG)...")
+        app.state.optimal = await get_optimal_service()
+        logger.info("OptimalService (RAG) initialized successfully")
+    except FeatureUnavailableError as e:
+        logger.info("OptimalService (RAG) not started", reason=e.message)
+        app.state.optimal = None
+    except Exception as e:
+        logger.warning(
+            "OptimalService (RAG) initialization failed - RAG features disabled",
+            error=str(e),
+        )
+        app.state.optimal = None
 
 
 async def _reconcile_rag_indexes(app: FastAPI) -> None:
@@ -187,20 +209,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     app.state.transcription = _AppServices.transcription
     app.state.extraction = _AppServices.extraction
 
-    # Initialize OptimalService (RAG) - BLOCKS until fully ready
-    # This ensures /health only returns 200 when RAG is operational
-    # Typical initialization time: 30-90 seconds (embedding + indexing)
-    try:
-        logger.info("Initializing OptimalService (RAG)...")
-        optimal_service = await get_optimal_service()
-        app.state.optimal = optimal_service
-        logger.info("OptimalService (RAG) initialized successfully")
-    except Exception as e:
-        logger.warning(
-            "OptimalService (RAG) initialization failed - RAG features disabled",
-            error=str(e),
-        )
-        app.state.optimal = None
+    await _start_optimal_service(app)
 
     # Wire the learning-propagation singleton to OptimalService. Without this,
     # record_learning() raises "not initialized" and every task completion logs
@@ -351,6 +360,23 @@ def _mount_release_routers(app: FastAPI, api_prefix: str) -> None:
     )
 
 
+def _add_request_middleware(app: FastAPI) -> None:
+    """CORS, run-scope gate, then the custom error/logging/correlation stack."""
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=settings.cors_allow_credentials,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Run-scoped model-service tokens are honored only behind this gate.
+    app.add_middleware(RunScopeMiddleware)
+
+    # Setup custom middleware (error handling, logging, correlation IDs)
+    setup_middleware(app)
+
+
 def create_app() -> FastAPI:
     """
     Create and configure the FastAPI application.
@@ -373,19 +399,7 @@ def create_app() -> FastAPI:
     # Middleware
     # ==========================================================================
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=settings.cors_allow_credentials,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
-    # Run-scoped model-service tokens are honored only behind this gate.
-    app.add_middleware(RunScopeMiddleware)
-
-    # Setup custom middleware (error handling, logging, correlation IDs)
-    setup_middleware(app)
+    _add_request_middleware(app)
 
     # fastapi-guard HTTP security layer — no-op unless ROBOCO_GUARD_ENABLED.
     # Mounted last so SecurityMiddleware is outermost and blocks hostile traffic

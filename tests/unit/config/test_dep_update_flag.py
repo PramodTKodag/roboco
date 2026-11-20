@@ -5,8 +5,13 @@ from __future__ import annotations
 import os
 from unittest import mock
 
+import pytest
 from roboco.config import Settings
-from roboco.services.settings import FEATURE_FLAGS, validate_setting
+from roboco.services.settings import (
+    FEATURE_FLAGS,
+    SettingValidationError,
+    validate_setting,
+)
 
 _DEFAULT_INTERVAL = 604800
 _DEFAULT_MAX_OPEN = 3
@@ -30,5 +35,7 @@ def test_dep_update_flag_registered_in_feature_flags() -> None:
     assert "dep_update_enabled" in [key for key, _ in FEATURE_FLAGS]
 
 
-def test_dep_update_flag_validates_as_bool() -> None:
-    validate_setting("dep_update_enabled", "true")
+def test_dep_update_flag_is_locked_off_by_policy() -> None:
+    validate_setting("dep_update_enabled", "false")
+    with pytest.raises(SettingValidationError):
+        validate_setting("dep_update_enabled", "true")

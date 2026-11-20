@@ -87,7 +87,20 @@ def _header(scope: Scope, name: bytes) -> str | None:
     return None
 
 
+def _is_canonical_path(path: str) -> bool:
+    """No dot segments and no empty middle segments.
+
+    The path arrives percent-decoded, so ``%2e%2e`` and ``%2f`` are already
+    ``..`` and ``/``. A proxy or router that normalises them afterwards would
+    otherwise turn an in-scope prefix into an out-of-scope route.
+    """
+    segments = path.split("/")
+    return "." not in segments and ".." not in segments and "" not in segments[1:-1]
+
+
 def _run_token_may_reach(method: str, path: str) -> bool:
+    if not _is_canonical_path(path):
+        return False
     if path.startswith(RUN_SCOPE_PATH_PREFIXES):
         return True
     if (method, path) in _SECRETARY_RUN_ROUTES:

@@ -5,8 +5,13 @@ from __future__ import annotations
 import os
 from unittest import mock
 
+import pytest
 from roboco.config import Settings
-from roboco.services.settings import FEATURE_FLAGS, validate_setting
+from roboco.services.settings import (
+    FEATURE_FLAGS,
+    SettingValidationError,
+    validate_setting,
+)
 
 _DEFAULT_TOP_K = 3
 _DEFAULT_MIN_SCORE = 0.6
@@ -34,5 +39,7 @@ def test_org_memory_flag_registered_in_feature_flags() -> None:
     assert "org_memory_enabled" in [key for key, _ in FEATURE_FLAGS]
 
 
-def test_org_memory_flag_validates_as_bool() -> None:
-    validate_setting("org_memory_enabled", "true")
+def test_org_memory_flag_is_locked_off_by_policy() -> None:
+    validate_setting("org_memory_enabled", "false")
+    with pytest.raises(SettingValidationError):
+        validate_setting("org_memory_enabled", "true")

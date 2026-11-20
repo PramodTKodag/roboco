@@ -10,21 +10,25 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING
 
+import pytest
 from roboco.agents_config import AGENT_UUIDS, verify_agent_token
 from roboco.config import settings
 from roboco.mcp import utils as mcp_utils
 from roboco.models.runtime import OrchestratorAgentConfig as AgentConfig
 from roboco.runtime.orchestrator import AgentOrchestrator
 
-if TYPE_CHECKING:
-    import pytest
-
-# main-pm carries roboco-optimal (always), roboco-docs (docs_roles) and
-# roboco-search (research_roles, research_enabled defaults True) all at once.
+# main-pm carries roboco-optimal (semantic_kb_enabled), roboco-docs (docs_roles)
+# and roboco-search (research_roles, research_enabled) all at once. Both policy
+# locked features are switched on in-process here only to prove the wiring.
 _AGENT_SLUG = "main-pm"
 _CLI_ARG_SERVERS = ("roboco-optimal", "roboco-docs", "roboco-search")
+
+
+@pytest.fixture
+def _cli_arg_servers_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "semantic_kb_enabled", True)
+    monkeypatch.setattr(settings, "research_enabled", True)
 
 
 def _spawn_token(monkeypatch: pytest.MonkeyPatch) -> str:
@@ -44,6 +48,7 @@ def _spawn_token(monkeypatch: pytest.MonkeyPatch) -> str:
     raise AssertionError("ROBOCO_AGENT_TOKEN not found in cmd")
 
 
+@pytest.mark.usefixtures("_cli_arg_servers_enabled")
 async def test_cli_arg_servers_get_uuid_not_slug() -> None:
     """_generate_mcp_config passes the UUID (not the slug) as sys.argv[1]
     to the three servers that identify their agent via CLI arg."""
@@ -62,6 +67,7 @@ async def test_cli_arg_servers_get_uuid_not_slug() -> None:
         )
 
 
+@pytest.mark.usefixtures("_cli_arg_servers_enabled")
 async def test_cli_arg_servers_headers_verify_against_spawn_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -85,3 +91,14 @@ async def test_cli_arg_servers_headers_verify_against_spawn_token(
             headers["X-Agent-Role"],
             headers.get("X-Agent-Team", ""),
         ), f"{name}'s header tuple ({headers}) failed verify_agent_token"
+
+
+async def test_policy_locked_servers_are_not_mounted_by_default() -> None:
+    """The semantic KB and web research are policy-locked: no server for either
+    is handed to an agent unless the lock is lifted."""
+    orch = AgentOrchestrator.__new__(AgentOrchestrator)
+    config_path = await orch._generate_mcp_config(_AGENT_SLUG)
+    servers = json.loads(Path(config_path).read_text())["mcpServers"]
+    assert "roboco-optimal" not in servers
+    assert "roboco-search" not in servers
+    assert "roboco-docs" in servers

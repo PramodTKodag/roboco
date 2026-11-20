@@ -260,12 +260,30 @@ class Settings(BaseSettings):
         default=1024, ge=100, description="Chunk size for journals/reflections"
     )
     rag_chunk_overlap: int = Field(default=128, ge=0)
-    rag_auto_update_enabled: bool = Field(default=True)
+    direct_model_clients_enabled: bool = Field(
+        default=False,
+        description=(
+            "Direct calls from the controller to an OpenAI-compatible model "
+            "endpoint (drafting, distilling, answer synthesis, eval judging). "
+            "Locked off by the subscription-only policy; model work goes "
+            "through the subscription runtime only."
+        ),
+    )
+    semantic_kb_enabled: bool = Field(
+        default=False,
+        description=(
+            "Semantic/vector knowledge base: embeddings and retrieval-answer "
+            "synthesis through a model server. Locked off by the "
+            "subscription-only policy; every KB entry point reports "
+            "feature_unavailable instead of returning an empty result."
+        ),
+    )
+    rag_auto_update_enabled: bool = Field(default=False)
     rag_auto_update_interval: int = Field(
         default=300, ge=60, description="Seconds between auto-updates"
     )
     indexer_stream_enabled: bool = Field(
-        default=True,
+        default=False,
         description="Route index/embedding writes through the indexer stream worker",
     )
     indexer_max_backlog: int = Field(
@@ -744,7 +762,7 @@ class Settings(BaseSettings):
     # provider's own API does. Unset key => graceful NullProvider (empty
     # results, no hard fail).
     research_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Master switch for the web-research capability. When false the "
             "roboco-search MCP server is not mounted into any agent container."
@@ -957,7 +975,7 @@ class Settings(BaseSettings):
     # token/org => disabled => the pitch approval path is inert (no repo is
     # created) until the CEO configures it.
     provisioning_enabled: bool = Field(
-        default=True,
+        default=False,
         description=(
             "Master switch for pitch auto-provisioning. With no token/org set "
             "the capability is inert regardless of this flag."

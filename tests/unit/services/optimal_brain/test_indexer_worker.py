@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from roboco.config import settings
 from roboco.events.stream_bus import StreamEventBus
 from roboco.models.events import Event, EventType
 from roboco.services.optimal_brain import indexer_worker
@@ -86,6 +87,14 @@ def _event_bytes(kind: str, payload: dict | None = None) -> bytes:
         .to_json()
         .encode()
     )
+
+
+@pytest.fixture(autouse=True)
+def _kb_and_stream_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Both flags are policy-locked off in a real run; these tests exercise the
+    worker itself, so they switch them on in-process."""
+    monkeypatch.setattr(settings, "semantic_kb_enabled", True)
+    monkeypatch.setattr(settings, "indexer_stream_enabled", True)
 
 
 @pytest.fixture(autouse=True)
@@ -718,3 +727,31 @@ async def test_reconcile_rag_indexes_is_a_noop_without_rag(
     await indexer_worker.reconcile_rag_indexes(None)
 
     reclaim_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_is_dropped_when_semantic_kb_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With the policy lock on, nothing is published and no inline index runs."""
+    monkeypatch.setattr(settings, "semantic_kb_enabled", False)
+    fake = _FakeStreamRedis()
+    bus = StreamEventBus(group_name=indexer_worker.CONSUMER_GROUP)
+    bus._redis = cast("Redis", fake)
+    indexer_worker._IndexerBusHolder.instance = bus
+
+    with patch.object(indexer_worker, "_schedule_inline") as inline:
+        await indexer_worker.enqueue_index_request("journal_entry", {"entry_id": "x"})
+
+    assert fake.xadd_calls == []
+    inline.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_indexer_does_not_start_when_semantic_kb_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "semantic_kb_enabled", False)
+    with patch.object(indexer_worker, "_get_indexer_bus") as bus:
+        await indexer_worker.run_indexer()
+    bus.assert_not_called()

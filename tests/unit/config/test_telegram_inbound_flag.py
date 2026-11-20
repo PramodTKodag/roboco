@@ -44,8 +44,10 @@ def test_telegram_inbound_flag_registered_in_feature_flags() -> None:
     assert "telegram_inbound_enabled" in [key for key, _ in FEATURE_FLAGS]
 
 
-def test_telegram_inbound_flag_validates_as_bool() -> None:
-    validate_setting("telegram_inbound_enabled", "true")
+def test_telegram_inbound_flag_is_locked_off_by_policy() -> None:
+    validate_setting("telegram_inbound_enabled", "false")
+    with pytest.raises(SettingValidationError):
+        validate_setting("telegram_inbound_enabled", "true")
 
 
 def test_telegram_last_update_id_validates_as_int() -> None:

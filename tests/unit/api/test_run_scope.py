@@ -202,6 +202,8 @@ async def test_other_secretary_routes_stay_out_of_scope(method: str, path: str) 
         "/api/settings",
         "/api/v1/flowx/a",
         "/api/v1/do/../tasks",
+        "/api/v1/do/./../tasks",
+        "/api/v1/do//tasks",
     ],
 )
 async def test_out_of_scope_routes_are_refused_and_never_reach_the_app(

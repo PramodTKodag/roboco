@@ -97,6 +97,7 @@ from roboco.agents_config import get_agent_role, get_agent_team
 from roboco.config import settings
 from roboco.eval.fixtures import FIXTURES, BenchTaskSpec
 from roboco.foundation import identity as _foundation
+from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models import Team
 from roboco.models.base import Complexity, TaskType
 
@@ -945,6 +946,7 @@ def _build_judge_prompt(fixture: BenchTaskSpec, diff: str, notes: str) -> str:
 
 
 async def _judge_chat(prompt: str) -> str | None:
+    require_direct_model_clients()
     async with httpx.AsyncClient(timeout=_JUDGE_TIMEOUT_SECONDS) as client:
         resp = await client.post(
             f"{settings.local_llm_base_url}/chat/completions",

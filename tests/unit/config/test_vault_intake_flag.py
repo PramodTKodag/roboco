@@ -6,8 +6,13 @@ from __future__ import annotations
 import os
 from unittest import mock
 
+import pytest
 from roboco.config import Settings
-from roboco.services.settings import FEATURE_FLAGS, validate_setting
+from roboco.services.settings import (
+    FEATURE_FLAGS,
+    SettingValidationError,
+    validate_setting,
+)
 
 _DEFAULT_INTERVAL = 300
 _DEFAULT_MAX_PER_CYCLE = 3
@@ -37,5 +42,7 @@ def test_vault_intake_flag_registered_in_feature_flags() -> None:
     assert "vault_intake_enabled" in [key for key, _ in FEATURE_FLAGS]
 
 
-def test_vault_intake_flag_validates_as_bool() -> None:
-    validate_setting("vault_intake_enabled", "true")
+def test_vault_intake_flag_is_locked_off_by_policy() -> None:
+    validate_setting("vault_intake_enabled", "false")
+    with pytest.raises(SettingValidationError):
+        validate_setting("vault_intake_enabled", "true")

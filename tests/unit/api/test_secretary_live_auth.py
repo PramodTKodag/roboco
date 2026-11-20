@@ -12,7 +12,6 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
-import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
@@ -52,11 +51,8 @@ async def auth_client(
     orch = _FakeOrchestrator()
     monkeypatch.setattr(deps._ServiceHolder, "orchestrator", orch)
 
-    def container_handler(_req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True})
-
-    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(container_handler))
-    registry = prompter_live.PrompterLiveRegistry(http_client=mock_client)
+    registry = prompter_live.PrompterLiveRegistry()
+    registry.set_turn_handler(lambda _sid, _text: True)
     prompter_live._RegistryHolder.instance = registry
 
     app = FastAPI()
@@ -66,7 +62,6 @@ async def auth_client(
         yield client
 
     prompter_live._RegistryHolder.instance = None
-    await mock_client.aclose()
 
 
 def _strict(monkeypatch: pytest.MonkeyPatch) -> None:

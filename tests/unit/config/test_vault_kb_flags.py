@@ -9,7 +9,11 @@ from unittest import mock
 import pytest
 from pydantic import ValidationError
 from roboco.config import Settings
-from roboco.services.settings import FEATURE_FLAGS, validate_setting
+from roboco.services.settings import (
+    FEATURE_FLAGS,
+    SettingValidationError,
+    validate_setting,
+)
 
 _DEFAULT_INTERVAL = 900
 
@@ -33,8 +37,10 @@ def test_vault_kb_flag_registered_in_feature_flags() -> None:
     assert "vault_kb_enabled" in [key for key, _ in FEATURE_FLAGS]
 
 
-def test_vault_kb_flag_validates_as_bool() -> None:
-    validate_setting("vault_kb_enabled", "true")
+def test_vault_kb_flag_is_locked_off_by_policy() -> None:
+    validate_setting("vault_kb_enabled", "false")
+    with pytest.raises(SettingValidationError):
+        validate_setting("vault_kb_enabled", "true")
 
 
 def test_vault_kb_dirs_clean_config_passes() -> None:

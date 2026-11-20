@@ -49,6 +49,7 @@ from roboco.foundation.policy.content import markers
 from roboco.foundation.policy.injection_guard import (
     screen_external_text_with_decisions,
 )
+from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models.base import Complexity, TaskNature, TaskStatus, TaskType, Team
 from roboco.services.base import BaseService
 from roboco.services.board_programs import program_armed
@@ -337,6 +338,7 @@ def _reply_prompt(screened_mention_text: str, voice: str, product_name: str) -> 
 
 async def _chat(prompt: str) -> str | None:
     """One local-LLM chat call (OpenAI-compatible); None on a non-success."""
+    require_direct_model_clients()
     async with httpx.AsyncClient(timeout=_CHAT_TIMEOUT_SECONDS) as client:
         resp = await client.post(
             f"{settings.local_llm_base_url}/chat/completions",

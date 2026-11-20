@@ -21,6 +21,7 @@ import pytest
 from roboco.mcp.optimal_server import normalize_index_types
 from roboco.models.optimal import IndexType
 from roboco.services import optimal as optimal_module
+from roboco.services.base import FeatureUnavailableError
 from roboco.services.optimal import (
     OptimalService,
     close_optimal_service,
@@ -83,6 +84,7 @@ class _SlowInitService(OptimalService):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("semantic_kb_on")
 async def test_get_optimal_service_never_returns_uninitialized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -112,6 +114,7 @@ async def test_get_optimal_service_never_returns_uninitialized(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("semantic_kb_on")
 async def test_indexing_entrypoint_does_not_raise_not_initialized(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -149,3 +152,14 @@ class _FakePlugin(BaseIndexPlugin):
 
     async def close(self) -> None:  # pragma: no cover - never awaited here
         return None
+
+
+@pytest.mark.asyncio
+async def test_get_optimal_service_is_unavailable_by_policy_by_default() -> None:
+    """The policy lock keeps the semantic KB off: no plugin, embedder or model
+    server is touched and the caller gets a clear feature_unavailable error."""
+    optimal_module._OptimalServiceHolder.instance = None
+    with pytest.raises(FeatureUnavailableError) as excinfo:
+        await optimal_module.get_optimal_service()
+    assert excinfo.value.details["code"] == "feature_unavailable"
+    assert optimal_module._OptimalServiceHolder.instance is None

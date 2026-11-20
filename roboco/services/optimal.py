@@ -21,6 +21,7 @@ from uuid import UUID
 
 import structlog
 
+from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models.optimal import (
     IndexDecisionParams,
     IndexErrorParams,
@@ -33,6 +34,7 @@ from roboco.models.optimal import (
     SearchOutcome,
     SearchResult,
 )
+from roboco.services.optimal_brain.availability import require_semantic_kb
 from roboco.services.optimal_brain.indexes import (
     BaseIndexPlugin,
     DecisionsIndexPlugin,
@@ -1816,6 +1818,7 @@ class OptimalService:
         (e.g., due to timeouts or errors). Includes retry logic for transient
         failures.
         """
+        require_direct_model_clients()
         import httpx
 
         from roboco.config import settings
@@ -2333,6 +2336,7 @@ class OptimalService:
         from roboco.config import settings
 
         try:
+            require_direct_model_clients()
             async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(
                     f"{settings.local_llm_base_url}/chat/completions",
@@ -2431,7 +2435,11 @@ async def get_optimal_service() -> OptimalService:
     serializes concurrent first-callers so a second coroutine can never observe
     a half-built, ``_initialized == False`` singleton mid-initialization (which
     previously surfaced as "OptimalService not initialized" during indexing).
+
+    Raises ``FeatureUnavailableError`` when the policy keeps the semantic KB off,
+    before any plugin, embedder or model-server connection is created.
     """
+    require_semantic_kb()
     if _OptimalServiceHolder.instance is not None:
         return _OptimalServiceHolder.instance
 

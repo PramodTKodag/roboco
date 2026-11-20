@@ -5,8 +5,13 @@ from __future__ import annotations
 import os
 from unittest import mock
 
+import pytest
 from roboco.config import Settings
-from roboco.services.settings import FEATURE_FLAGS, validate_setting
+from roboco.services.settings import (
+    FEATURE_FLAGS,
+    SettingValidationError,
+    validate_setting,
+)
 
 _DEFAULT_MAX_OPEN = 5
 
@@ -41,5 +46,7 @@ def test_video_engine_flags_registered_in_feature_flags() -> None:
     assert "video_on_spotlight" in keys
 
 
-def test_video_engine_flag_validates_as_bool() -> None:
-    validate_setting("video_engine_enabled", "true")
+def test_video_engine_flag_is_locked_off_by_policy() -> None:
+    validate_setting("video_engine_enabled", "false")
+    with pytest.raises(SettingValidationError):
+        validate_setting("video_engine_enabled", "true")

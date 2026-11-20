@@ -18,6 +18,7 @@ import httpx
 import structlog
 
 from roboco.config import settings
+from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models.optimal import SearchResult, ValidationResult
 from roboco.services.exceptions import (
     HTTP_TOO_MANY_REQUESTS,
@@ -347,6 +348,7 @@ class ValidatorService:
     async def _test_llm_connectivity(self) -> None:
         """Test if LLM is available for validation."""
         try:
+            require_direct_model_clients()
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(f"{settings.local_llm_base_url}/models")
                 self._llm_available = response.is_success
@@ -505,6 +507,7 @@ class ValidatorService:
         Returns:
             Tuple of (violations, warnings)
         """
+        require_direct_model_clients()
         # Build the standards context for the LLM
         standards_text = self._build_standards_context(standards)
 

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Protocol, Union
 
 from roboco.config import settings
 from roboco.logging import get_logger
+from roboco.services.optimal_brain.availability import require_semantic_kb
 from roboco.services.optimal_brain.text_chunker import Chunk
 
 if TYPE_CHECKING:
@@ -102,6 +103,7 @@ async def get_shared_embedder(
     async with _SharedEmbedderHolder.get_lock():
         # Double-check after acquiring lock (another coroutine may have created it)
         if _SharedEmbedderHolder.instance is None:
+            require_semantic_kb()
             model = model or settings.default_embedding_model
 
             logger.info(

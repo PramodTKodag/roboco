@@ -19,14 +19,14 @@ from roboco.services.settings import (
 
 
 def test_feature_flags_are_writable_as_bool() -> None:
-    validate_setting("external_pr_enabled", "true")
-    validate_setting("research_enabled", "FALSE")  # case-insensitive
-    validate_setting("internal_pr_enabled", "  true  ")  # whitespace tolerated
+    validate_setting("strategy_engine_enabled", "true")
+    validate_setting("roadmap_engine_enabled", "FALSE")  # case-insensitive
+    validate_setting("devops_enabled", "  true  ")  # whitespace tolerated
 
 
 def test_non_bool_value_rejected() -> None:
     with pytest.raises(SettingValidationError):
-        validate_setting("external_pr_enabled", "yes")
+        validate_setting("strategy_engine_enabled", "yes")
 
 
 def test_unknown_key_rejected() -> None:
@@ -50,11 +50,11 @@ async def test_apply_overrides_stored_flags_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Baseline env defaults.
-    monkeypatch.setattr(cfg, "external_pr_enabled", False)
-    monkeypatch.setattr(cfg, "research_enabled", True)
+    monkeypatch.setattr(cfg, "strategy_engine_enabled", False)
+    monkeypatch.setattr(cfg, "roadmap_engine_enabled", True)
 
-    # Only external_pr_enabled has a stored override; research_enabled is unset.
-    stored = {"external_pr_enabled": "true"}
+    # Only strategy_engine_enabled has a stored override; roadmap is unset.
+    stored = {"strategy_engine_enabled": "true"}
 
     async def fake_get(_self: SettingsService, key: str) -> str | None:
         return stored.get(key)
@@ -62,10 +62,10 @@ async def test_apply_overrides_stored_flags_only(
     monkeypatch.setattr(SettingsService, "get", fake_get)
     applied = await settings_mod.apply_persisted_feature_flags(MagicMock())
 
-    assert "external_pr_enabled" in applied
-    assert cfg.external_pr_enabled is True  # stored override applied
-    assert cfg.research_enabled is True  # unset → env default untouched
-    assert "research_enabled" not in applied
+    assert "strategy_engine_enabled" in applied
+    assert cfg.strategy_engine_enabled is True  # stored override applied
+    assert cfg.roadmap_engine_enabled is True  # unset → env default untouched
+    assert "roadmap_engine_enabled" not in applied
 
 
 @pytest.mark.asyncio

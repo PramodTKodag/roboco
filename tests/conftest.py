@@ -147,6 +147,26 @@ def _no_inherited_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_settings, "anthropic_api_key", None)
 
 
+@pytest.fixture
+def direct_model_clients_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lift the direct-model-client policy lock in-process for client tests.
+
+    A real run keeps ``direct_model_clients_enabled`` locked off; a test that
+    drives a model-call path against a mocked HTTP transport opts in here.
+    """
+    monkeypatch.setattr(_settings, "direct_model_clients_enabled", True)
+
+
+@pytest.fixture
+def semantic_kb_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lift the semantic-KB policy lock in-process for tests of the KB itself.
+
+    A real run keeps ``semantic_kb_enabled`` locked off; a test that drives the
+    indexing or retrieval path with a mocked OptimalService opts in explicitly.
+    """
+    monkeypatch.setattr(_settings, "semantic_kb_enabled", True)
+
+
 @pytest.fixture(autouse=True)
 def _no_live_redis(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep every test off the real localhost Redis (see module docstring).

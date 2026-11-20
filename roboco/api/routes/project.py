@@ -12,8 +12,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 from roboco.api.deps import (
     CurrentAgentContext,
     DbSession,
-    require_ceo_role,
     require_cell_access,
+    require_ceo_role,
     require_pm_or_above,
 )
 from roboco.api.schemas.project import (
