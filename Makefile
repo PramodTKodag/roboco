@@ -93,7 +93,7 @@ PERSONAL_STACK = uv run python scripts/personal/stack.py
 personal-stage:
 	@$(PERSONAL_STACK) stage
 
-# Build the pinned images and start the stack on 127.0.0.1:3000.
+# Build the pinned images and start the stack on 127.0.0.1 (ROBOCO_PERSONAL_PORT, default 3300).
 .PHONY: personal-up
 personal-up:
 	@$(PERSONAL_STACK) up
