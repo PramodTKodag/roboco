@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
+from roboco.runtime.subscription.cli import CLAUDE_BINARY
+from roboco.runtime.subscription.cli_pin import CliBuildNotApproved, verify_cli_binary
 from roboco.runtime.subscription.gateway_socket import GatewayServer
 from roboco.runtime.subscription.launcher_client import WorkerLauncher
 from roboco.runtime.subscription.policy import (
@@ -144,6 +146,11 @@ async def _serve(settings: ServiceSettings) -> None:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    try:
+        verify_cli_binary(CLAUDE_BINARY)
+    except CliBuildNotApproved as exc:
+        logger.error("Claude service refused to start: %s", exc)
+        return 2
     try:
         settings = load_service_settings(os.environ)
     except ServiceSettingsError as exc:

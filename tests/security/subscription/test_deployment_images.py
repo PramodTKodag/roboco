@@ -14,7 +14,13 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from roboco.runtime.subscription.cli_pin import (
+    PINNED_BINARY_SHA256,
+    PINNED_CLI_VERSION,
+    sha256_of_file,
+)
 from tests.integration.subscription.docker_support import (
+    REPO_ROOT,
     docker,
     docker_unavailable_reason,
 )
@@ -166,3 +172,57 @@ def test_service_images_do_not_run_as_root_except_the_socket_holder() -> None:
         ).stdout.strip()
         is_root = user in {"", "0", "root", "0:0"}
         assert is_root == (service in expected_root), (service, user)
+
+
+_SERVICE_IMAGE_SOURCES = (
+    "roboco/runtime/subscription/cli.py",
+    "roboco/runtime/subscription/cli_pin.py",
+    "roboco/runtime/subscription/policy.py",
+    "roboco/runtime/subscription/service_main.py",
+)
+
+
+def _in_image(image: str, *command: str, volume: str | None = None) -> str:
+    mount = ["-v", volume] if volume else []
+    return docker(
+        "run", "--rm", "--network", "none", *mount, "--entrypoint", command[0], image,
+        *command[1:],
+        check=False,
+    ).stdout  # fmt: skip
+
+
+def test_the_shipped_cli_is_the_approved_build() -> None:
+    image = _latest_image("claude-service")
+    if image is None:
+        pytest.skip("claude-service image is not built")
+    digest = _in_image(image, "sha256sum", "/opt/claude/claude").split()[0]
+    assert digest in PINNED_BINARY_SHA256.values()
+    version = _in_image(image, "/opt/claude/claude", "--version")
+    assert PINNED_CLI_VERSION in version
+
+
+def test_the_shipped_trusted_policy_files_match_this_tree() -> None:
+    image = _latest_image("claude-service")
+    if image is None:
+        pytest.skip("claude-service image is not built")
+    for relative in _SERVICE_IMAGE_SOURCES:
+        shipped = _in_image(image, "sha256sum", f"/opt/service/{relative}").split()[0]
+        assert shipped == sha256_of_file(REPO_ROOT / relative), relative
+
+
+def test_unapproved_cli_contract_blocks(tmp_path: Path) -> None:
+    """A changed binary in the real image stops the service before it serves."""
+    image = _latest_image("claude-service")
+    if image is None:
+        pytest.skip("claude-service image is not built")
+    substitute = tmp_path / "claude"
+    substitute.write_bytes(b"#!/bin/sh\nexit 0\n")
+    substitute.chmod(0o755)
+    result = docker(
+        "run", "--rm", "--network", "none",
+        "-v", f"{substitute}:/opt/claude/claude:ro",
+        image,
+        check=False,
+    )  # fmt: skip
+    assert result.returncode == 2
+    assert "does not match approved build" in result.stderr + result.stdout

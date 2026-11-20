@@ -32,13 +32,15 @@ from roboco.foundation.policy.subscription_policy import (  # noqa: F401 - re-ex
     classify_auth_status,
     classify_auth_status_text,
 )
+from roboco.runtime.subscription.cli_pin import (  # noqa: F401 - re-exported
+    PINNED_BINARY_SHA256,
+    PINNED_CLI_VERSION,
+)
 
 if TYPE_CHECKING:
     from types import TracebackType
 
 logger = logging.getLogger("probe_cli_contract")
-
-PINNED_CLI_VERSION = "2.1.311"
 
 # npm registry tarball integrity (sha512 SRI) for the vendor's platform packages.
 # These packages declare no install scripts; only `package/claude` is extracted.
@@ -52,11 +54,6 @@ PINNED_PACKAGES: dict[str, tuple[str, str]] = {
         "sha512-dk1lVMt7n+NlYucKM7dLp/PfrK32pa/4oKQkacfazlSj8rG+hkH67wnDnaFG9Gs2al3OjK8PTVHgZ2WGHXoWUg==",
     ),
 }
-PINNED_BINARY_SHA256: dict[str, str] = {
-    "arm64": "2e2496c9a8065df93acb0fca2d341f59a6b8777649b2e025ab8c9bcd5eef61f3",
-    "x64": "86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada",
-}
-
 PROBE_BASE_IMAGE = (
     "debian:bookworm-slim@sha256:"
     "734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc"
