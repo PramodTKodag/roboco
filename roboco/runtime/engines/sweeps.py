@@ -372,7 +372,7 @@ class SweepsEngine(_Base):
         back to the durable transcript (the SDK can report zero mid-run, the
         same race the finalize path handles). Returns ``None`` when neither
         source has any usage yet. GROK / OPENAI (codex) / GEMINI / KIMI /
-        OPENROUTER / NEBIUS / HUMMIN have no SDK server or Claude transcript,
+        NEBIUS have no SDK server or Claude transcript,
         so each routes to its own ``usage.json``, the same early return the
         finalize path uses, so live USAGE_SNAPSHOT reflects those agents
         mid-run too (in practice a one-shot run's usage.json is written only
@@ -396,9 +396,7 @@ class SweepsEngine(_Base):
             ModelProvider.OPENAI.value: self._codex_usage_tokens,
             ModelProvider.GEMINI.value: self._gemini_usage_tokens,
             ModelProvider.KIMI.value: self._kimi_usage_tokens,
-            ModelProvider.OPENROUTER.value: self._openrouter_usage_tokens,
             ModelProvider.NEBIUS.value: self._nebius_usage_tokens,
-            ModelProvider.HUMMIN.value: self._hummin_usage_tokens,
         }
         read_usage_json = usage_json_readers.get(provider) if provider else None
         if read_usage_json is not None:

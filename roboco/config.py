@@ -381,29 +381,16 @@ class Settings(BaseSettings):
         description="Base URL for Ollama native API (embeddings, model mgmt)",
     )
 
-    routing_strict: bool = Field(
-        default=False,
-        description=(
-            "Fail-closed model routing: when an agent has a configured "
-            "model_assignment whose provider is disabled (or otherwise "
-            "unroutable), raise instead of silently downgrading to the "
-            "legacy Anthropic path. Off (default) => graceful degradation "
-            "with a warning, so a misconfigured provider never stalls a "
-            "spawn; the warning still surfaces the bypass so it isn't silent."
-        ),
-    )
-
     # ==========================================================================
     # Decisions service (typed System One decisions, default-off)
     # ==========================================================================
     # A small orchestrator-side service that answers TYPED questions (choice /
     # score / noul) with calibrated confidence at decision points that would
-    # otherwise be a full LLM call or a hardcoded heuristic. Three tiers behind
-    # one wire format, all served by the roboco-decisions sidecar or the
-    # OpenRouter Decisions API: Clef (self-hosted 27B, built-in sweet-spot
-    # default, no key, no spend), Laya (self-hosted 421M, the cheap option,
-    # fallback when the Clef backend is unhealthy) and Jev via OpenRouter
-    # (opt-in, the expensive option). With the master flag off, every call
+    # otherwise be a full LLM call or a hardcoded heuristic. Two tiers behind
+    # one wire format, all served by the roboco-decisions sidecar: Clef
+    # (self-hosted 27B, built-in sweet-spot default, no key, no spend) and Laya
+    # (self-hosted 421M, the cheap option, fallback when the Clef backend is
+    # unhealthy). With the master flag off, every call
     # site does exactly what it did before this service existed; decisions
     # can only add behavior, never subtract, and nothing ever materializes on
     # a verdict alone. See docs/internal/decisions-spec.md.
@@ -439,8 +426,8 @@ class Settings(BaseSettings):
         default="http://roboco-decisions:8100",
         description=(
             "Base URL of the self-hosted Decisions sidecar (the roboco-decisions "
-            "container on the internal bridge). The sidecar mirrors the "
-            "OpenRouter Decisions wire shape at /api/alpha/decisions so the "
+            "container on the internal bridge). The sidecar serves the "
+            "Decisions wire shape at /api/alpha/decisions so the "
             "client stays one implementation."
         ),
     )
@@ -462,15 +449,6 @@ class Settings(BaseSettings):
             "container exists and the master flag is on."
         ),
     )
-    decisions_tier_openrouter_enabled: bool = Field(
-        default=False,
-        description=(
-            "OPT-IN fallback tier: serve decisions through the OpenRouter "
-            "Decisions API (typesafe/jev-1.13) when the sidecar is disabled "
-            "or unhealthy. Off by default - opting in is a deliberate spend "
-            "and requires an OpenRouter key on Settings -> AI Providers."
-        ),
-    )
     decisions_timeout_s: float = Field(
         default=5.0,
         gt=0,
@@ -487,24 +465,6 @@ class Settings(BaseSettings):
             "attempt, no retries). The 27B forward pass over a capped state "
             "is CPU prefill-bound: seconds on typical pilot states, tens of "
             "seconds worst case. Measure on the real deploy before tuning."
-        ),
-    )
-    decisions_openrouter_timeout_s: float = Field(
-        default=2.0,
-        gt=0,
-        description=(
-            "Per-call timeout for the OpenRouter fallback tier (single "
-            "attempt, no retries)."
-        ),
-    )
-    decisions_cost_alert_usd: float = Field(
-        default=1.0,
-        gt=0,
-        description=(
-            "Cumulative daily OpenRouter-fallback Decisions spend (USD, "
-            "summed from per-call usage.cost per UTC day) above which the "
-            "CEO gets one ack-required alert per day. The 402-twice-in-"
-            "an-hour alert is independent of this threshold."
         ),
     )
     decisions_pilots_on: str = Field(
@@ -2521,118 +2481,7 @@ class Settings(BaseSettings):
             "ROBOCO_KIMI_MAX_CONCURRENT only if you understand that risk"
         ),
     )
-    # The hummin CLI model id passed at spawn (`hummin --mode json --model
-    # zai/<id>`). Bare zai-catalog id — the entrypoint prefixes the provider.
-    # The `:high` suffix (Z.ai's high-thinking variant) is the operator
-    # default: selecting the Hummin mode lands the fleet on it with no manual
-    # model pick. See roboco.llm.providers.hummin for the no-MCP V1 caveats.
-    hummin_cli_model: str = Field(
-        default="glm-5.3-flash:high",
-        description=(
-            "hummin CLI model id passed to `hummin --mode json --model zai/<id>`; "
-            "override via ROBOCO_HUMMIN_CLI_MODEL"
-        ),
-    )
-    # Retry_after tunables for parking the HUMMIN provider (kimi's tunable
-    # Settings pattern). Flat retry_after (no repark backoff bookkeeping —
-    # add it only if hummin is observed re-parking in a tight cycle).
-    hummin_rate_limit_retry_after_seconds: float = Field(
-        default=60.0,
-        ge=1.0,
-        description=(
-            "Base retry_after (seconds) when parking the HUMMIN provider on a "
-            "Z.ai quota/rate-limit exit; override via "
-            "ROBOCO_HUMMIN_RATE_LIMIT_RETRY_AFTER_SECONDS"
-        ),
-    )
-    hummin_auth_retry_after_seconds: float = Field(
-        default=60.0,
-        ge=1.0,
-        description=(
-            "retry_after (seconds) when parking the HUMMIN provider on a "
-            "missing/invalid Z.ai key (entrypoint preflight exit 78); "
-            "override via ROBOCO_HUMMIN_AUTH_RETRY_AFTER_SECONDS"
-        ),
-    )
-    # No OAuth chain to protect (unlike kimi's shared refresh-token mount) —
-    # hummin auth is a static per-spawn env key. Uncapped by default; set a
-    # cap only if Z.ai throttles the GLM Coding Plan account in practice.
-    hummin_max_concurrent: int | None = Field(
-        default=None,
-        ge=1,
-        description=(
-            "Max concurrent live HUMMIN agent containers (None = uncapped). "
-            "Override via ROBOCO_HUMMIN_MAX_CONCURRENT only if Z.ai throttles "
-            "the account in practice"
-        ),
-    )
-    # OpenRouter — the Ollama shape, not Grok. A static metered API key
-    # injected via env (OPENROUTER_API_KEY + OPENROUTER_BASE_URL), no ~/. auth
-    # mount and no refresh loop (see roboco.llm.providers.openrouter). The
-    # default base URL is OpenRouter's public endpoint; the operator's key is
-    # stored Fernet-encrypted by the routing service (set_openrouter_api_key).
-    openrouter_base_url: str = Field(
-        default="https://openrouter.ai/api/v1",
-        description=(
-            "OpenRouter API base URL injected as OPENROUTER_BASE_URL at "
-            "spawn. Override via ROBOCO_OPENROUTER_BASE_URL"
-        ),
-    )
-    # The default OpenRouter model id (provider/model form, e.g.
-    # "anthropic/claude-sonnet-5") passed to `opencode run --model` when the
-    # routing assignment does not pin a specific model. The live catalog is
-    # searched on demand (GET /providers/openrouter/models) and the picked
-    # model id is stored via provider_type_override — this is only the floor.
-    openrouter_cli_model: str = Field(
-        default="anthropic/claude-sonnet-5",
-        description=(
-            "Default OpenRouter model id (provider/model) passed to opencode "
-            "when no per-assignment model is pinned. Override via "
-            "ROBOCO_OPENROUTER_CLI_MODEL"
-        ),
-    )
-    # Retry_after tunables for parking the OPENROUTER provider (the kimi
-    # pattern: real Settings fields, not hardcoded module constants). An
-    # operator may want a different cadence for OpenRouter's metered credit
-    # pools than the flat 60s default. The rate-limit value backs
-    # _park_openrouter_rate_limited's exponential re-park backoff (429 -> exit
-    # 75); the auth value covers the missing/invalid API key preflight (401 ->
-    # exit 78).
-    openrouter_rate_limit_retry_after_seconds: float = Field(
-        default=60.0,
-        ge=1.0,
-        description=(
-            "Base retry_after (seconds) when parking the OPENROUTER provider "
-            "on a quota/rate-limit exit; override via "
-            "ROBOCO_OPENROUTER_RATE_LIMIT_RETRY_AFTER_SECONDS"
-        ),
-    )
-    openrouter_auth_retry_after_seconds: float = Field(
-        default=60.0,
-        ge=1.0,
-        description=(
-            "retry_after (seconds) when parking the OPENROUTER provider on a "
-            "missing/invalid API key (entrypoint preflight exit 78); override "
-            "via ROBOCO_OPENROUTER_AUTH_RETRY_AFTER_SECONDS"
-        ),
-    )
-    openrouter_http_referer: str = Field(
-        default="",
-        description=(
-            "Optional HTTP-Referer sent on OpenRouter requests (OpenRouter "
-            "surfaces it on the usage dashboard). Override via "
-            "ROBOCO_OPENROUTER_HTTP_REFERER"
-        ),
-    )
-    openrouter_x_title: str = Field(
-        default="RoboCo",
-        description=(
-            "Optional X-Title sent on OpenRouter requests (site name shown on "
-            "the OpenRouter usage dashboard). Override via "
-            "ROBOCO_OPENROUTER_X_TITLE"
-        ),
-    )
-    # Nebius Token Factory - the same Ollama shape as OpenRouter: a static
+    # Nebius Token Factory - a static
     # metered API key injected via env (NEBIUS_API_KEY + NEBIUS_BASE_URL), no
     # ~/. auth mount and no refresh loop (see roboco.llm.providers.nebius).
     # The endpoint is OpenAI-compatible at
@@ -2663,8 +2512,7 @@ class Settings(BaseSettings):
             "ROBOCO_NEBIUS_CLI_MODEL"
         ),
     )
-    # Retry_after tunables for parking the NEBIUS provider (the openrouter
-    # pattern: real Settings fields, not hardcoded module constants). The
+    # Retry_after tunables for parking the NEBIUS provider (real Settings fields, not hardcoded module constants). The
     # rate-limit value backs _park_nebius_rate_limited's exponential re-park
     # backoff (429 -> exit 75); the auth value covers the missing/invalid API
     # key preflight (401 -> exit 78).

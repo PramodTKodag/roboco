@@ -109,10 +109,8 @@ export enum ModelProvider {
   GROK = "grok",
   GEMINI = "gemini",
   KIMI = "kimi",
-  OPENROUTER = "openrouter",
   NEBIUS = "nebius",
   ZAI = "zai",
-  HUMMIN = "hummin",
 }
 
 export enum AssignmentScope {

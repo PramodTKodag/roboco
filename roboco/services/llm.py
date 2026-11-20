@@ -14,10 +14,11 @@ the plain ROLE row everything else still uses. It reuses the existing ROLE
 scope + `scope_value` column — no schema change — so an absent compound row
 is a pure no-op that falls through to the plain ROLE row exactly as before.
 
-If none apply, falls back to the legacy `ROLE_MODEL_MAP` + implicit
-Anthropic provider so deployments with zero rows behave exactly as
-before. Decryption failures are contained: the service logs the error
-and downgrades to the legacy path rather than failing the spawn.
+If no assignment applies, the agent uses the default `ROLE_MODEL_MAP` +
+implicit Anthropic provider. A configured assignment that cannot be used
+(disabled provider, unreachable self-hosted server, undecryptable token)
+raises `ProviderRoutingError`; the agent is never moved to another provider
+automatically.
 
 Self-hosted (LOCAL) provider support:
 - derive_mode() returns 'self_hosted' when there is exactly one
@@ -28,29 +29,10 @@ Self-hosted (LOCAL) provider support:
   when the target provider is LOCAL (self-hosted models are dynamic;
   they bypass catalog validation).
 - resolve_for_agent() checks reachability of the LOCAL base_url
-  and falls back to Anthropic if the server is unreachable.
+  and raises `ProviderRoutingError` if the server is unreachable.
 
-OpenRouter provider support:
-- derive_mode() returns 'openrouter' when there is exactly one
-  GLOBAL assignment pointing to the OPENROUTER provider.
-- apply_mode('openrouter', ...) enables the OPENROUTER provider and
-  sets a GLOBAL assignment to the given model id via
-  provider_type_override (OpenRouter models are NOT in the static
-  MODEL_CATALOG - the catalog is live, searched on demand via
-  GET /providers/openrouter/models).
-- set_openrouter_api_key() Fernet-encrypts the API key on the
-  provider row (mirrors set_grok_api_key). Empty string clears +
-  disables; non-empty encrypts + enables.
-- Cost-tier limitation: OpenRouter models have no rows in the
-  _PRICING table (cost is attributed from OpenRouter's own metered
-  usage.cost, not the static per-token table), so
-  input_price_per_million returns 0.0 for any OpenRouter model —
-  the cost-tiered complexity-override downgrade-only comparator
-  treats them as the cheapest tier. See _apply_openrouter's
-  docstring for the full caveat.
-
-Nebius provider support (the openrouter twin, against Nebius Token
-Factory's OpenAI-compatible endpoint):
+Nebius provider support (against Nebius Token Factory's OpenAI-compatible
+endpoint):
 - derive_mode() returns 'nebius' when there is exactly one
   GLOBAL assignment pointing to the NEBIUS provider.
 - apply_mode('nebius', ...) enables the NEBIUS provider and
@@ -59,9 +41,9 @@ Factory's OpenAI-compatible endpoint):
   members now - see the levels-parity batch - while the full catalog
   stays live, searched on demand via GET /providers/nebius/models).
 - set_nebius_api_key() Fernet-encrypts the API key on the
-  provider row (mirrors set_openrouter_api_key). Empty string clears +
+  provider row (mirrors set_ollama_api_key). Empty string clears +
   disables; non-empty encrypts + enables.
-- Same cost-tier limitation as OpenRouter: no _PRICING rows, metered
+- Cost-tier limitation: no _PRICING rows, metered
   usage.cost attribution, 0.0 list price - see _apply_nebius.
 
 ZAI provider support (Z.ai GLM family):
@@ -78,29 +60,8 @@ ZAI provider support (Z.ai GLM family):
 - set_zai_api_key() Fernet-encrypts the API key on the provider row
   (mirrors set_ollama_api_key). Empty string clears + disables;
   non-empty encrypts + enables.
-- Cost-tier limitation mirrors OpenRouter: no _PRICING rows, so
+- Cost-tier limitation: no _PRICING rows, so
   input_price_per_million returns 0.0 for any ZAI model.
-
-HUMMIN provider support (the GLM go-to, GLM-native hummin CLI):
-- The GLM catalog entries (glm-5.3, glm-5.3-flash, glm-5.3-highspeed)
-  re-pointed here from ZAI (2026-09-17): hummin runs GLM natively
-  (pi-harness fork, GLM Coding Plan endpoint) while the ZAI
-  Anthropic-protocol path stays enabled as a manual fallback (it keeps
-  its row + key endpoint; it simply has no static-catalog entries
-  anymore).
-- derive_mode() returns 'hummin' when the mode-authored rows (the GLOBAL
-  default + the plain ROLE oversight/delivery tiers) all point to the
-  HUMMIN provider; AGENT_SLUG pins and complexity overrides never
-  disqualify the label.
-- apply_mode('hummin', ...) force-enables the HUMMIN row (the
-  kimi/openrouter shape: the spawn-time key check is the gate — a
-  missing ZAI_API_KEY exits the container 78 at the auth preflight and
-  the orchestrator parks the provider) and sets a GLOBAL assignment to
-  the given model (default settings.hummin_cli_model), then seeds the
-  _HUMMIN_ROLE_TIERS ROLE rows on top.
-- set_hummin_api_key() Fernet-encrypts the Z.ai key on the provider row
-  (the set_zai_api_key twin). Empty string clears + disables; non-empty
-  encrypts + enables.
 """
 
 from __future__ import annotations
@@ -144,27 +105,6 @@ if TYPE_CHECKING:
 _OLLAMA_TAGS_TIMEOUT = 5.0  # seconds
 _log = structlog.get_logger(__name__)
 
-# Hummin (GLM) role tiers seeded by apply_mode('hummin') on top of the GLOBAL
-# default: (role, model_name). Thinking-heavy oversight roles ride the
-# high-thinking flash variant; mechanical delivery roles ride the low-thinking
-# flash variant. Roles not listed fall through to the GLOBAL default
-# (settings.hummin_cli_model). Prompter/secretary never land here, interactive
-# agents are exempt from the delivery-only provider (model_routing).
-_HUMMIN_ROLE_TIERS: tuple[tuple[str, str], ...] = (
-    # High-thinking tier: judgment / oversight
-    ("auditor", "glm-5.3-flash:high"),
-    ("product_owner", "glm-5.3-flash:high"),
-    ("head_marketing", "glm-5.3-flash:high"),
-    ("pr_reviewer", "glm-5.3-flash:high"),
-    ("devops", "glm-5.3-flash:high"),
-    ("main_pm", "glm-5.3-flash:high"),
-    # Low-thinking tier: mechanical delivery
-    ("developer", "glm-5.3-flash:low"),
-    ("qa", "glm-5.3-flash:low"),
-    ("documenter", "glm-5.3-flash:low"),
-    ("cell_pm", "glm-5.3-flash:low"),
-)
-
 # Cost-tiered seed applied by apply_mode('cost_tiered'): (role, complexity,
 # model_name). RETIRED to empty (2026-07-24): the one entry seeded
 # developer:low -> haiku, but haiku can't reliably emit the structured
@@ -188,10 +128,8 @@ _SINGLE_GLOBAL_MODE_BY_PROVIDER: dict[
         "codex",
         "gemini",
         "kimi",
-        "openrouter",
         "nebius",
         "zai",
-        "hummin",
         "ollama",
         "self_hosted",
     ],
@@ -200,10 +138,8 @@ _SINGLE_GLOBAL_MODE_BY_PROVIDER: dict[
     ModelProvider.OPENAI: "codex",
     ModelProvider.GEMINI: "gemini",
     ModelProvider.KIMI: "kimi",
-    ModelProvider.OPENROUTER: "openrouter",
     ModelProvider.NEBIUS: "nebius",
     ModelProvider.ZAI: "zai",
-    ModelProvider.HUMMIN: "hummin",
     ModelProvider.OLLAMA_CLOUD: "ollama",
     ModelProvider.LOCAL: "self_hosted",
 }
@@ -243,57 +179,6 @@ async def probe_ollama_tags(base_url: str) -> tuple[list[str], str | None]:
         return [], "An unexpected error occurred while probing the self-hosted server."
 
 
-_OPENROUTER_MODELS_TIMEOUT = 10.0
-_OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
-
-
-async def probe_openrouter_models(
-    api_key: str, query: str = ""
-) -> tuple[list[dict[str, Any]], str | None]:
-    """Fetch the model list from OpenRouter's live API.
-
-    Hits ``https://openrouter.ai/api/v1/models`` with the bearer key and
-    returns only models that support tool calls, filtered by the optional
-    ``query`` substring (case-insensitive match on the model id / name).
-    Returns ``(models, None)`` on success or ``([], error_message)`` on
-    any failure. Never raises — mirrors ``probe_ollama_tags``.
-
-    Each model dict carries: ``id`` (the OpenRouter model slug, e.g.
-    ``"deepseek/deepseek-chat"``), ``name`` (display name), ``context_length``,
-    ``pricing`` (the OpenRouter pricing sub-dict with ``prompt`` /
-    ``completion`` per-token rates as strings).
-    """
-    try:
-        async with httpx.AsyncClient(timeout=_OPENROUTER_MODELS_TIMEOUT) as client:
-            resp = await client.get(
-                _OPENROUTER_MODELS_URL,
-                headers={"Authorization": f"Bearer {api_key}"},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.TimeoutException:
-        return (
-            [],
-            f"Connection to OpenRouter timed out after {_OPENROUTER_MODELS_TIMEOUT}s",
-        )
-    except httpx.ConnectError:
-        return [], "Could not connect to OpenRouter — service may be offline"
-    except httpx.HTTPStatusError as exc:
-        status_code = exc.response.status_code
-        if status_code == 401:  # noqa: PLR2004
-            return [], "OpenRouter API key is invalid or expired"
-        return [], f"OpenRouter returned HTTP {status_code}"
-    except Exception as exc:
-        _log.error(
-            "Unexpected error probing OpenRouter models",
-            error=exc.__class__.__name__,
-        )
-        return [], "An unexpected error occurred while probing OpenRouter."
-
-    raw_models = data.get("data", []) if isinstance(data, dict) else []
-    return _filter_openrouter_models(raw_models, query.lower()), None
-
-
 _NEBIUS_MODELS_TIMEOUT = 10.0
 
 
@@ -306,14 +191,14 @@ async def probe_nebius_models(
     filters by the optional ``query`` substring (case-insensitive match on
     the model id / name). Returns ``(models, None)`` on success or
     ``([], error_message)`` on any failure. Never raises - mirrors
-    ``probe_openrouter_models``.
+    ``probe_ollama_tags``.
 
     Token Factory's list is the generic OpenAI-compatible ``GET /v1/models``
-    shape (``{"data": [{"id": ...}, ...]}``) - unlike OpenRouter it carries
+    shape (``{"data": [{"id": ...}, ...]}``) - it carries
     NO capability metadata (no ``supported_parameters`` tool filter, no
     pricing, usually no context length), so the only filter is the query
     substring and the only field of substance is ``id``. Each returned dict
-    keeps the OpenRouter entry shape (``id`` / ``name`` / ``context_length``
+    keeps the provider model entry shape (``id`` / ``name`` / ``context_length``
     / ``pricing``) with the absent fields defaulted, so the panel's model
     picker renders it unchanged.
     """
@@ -357,7 +242,7 @@ def _filter_nebius_models(
     Token Factory carries no capability metadata on the list endpoint, so
     there is no tool-support filter (parity would be a lie); ``name`` falls
     back to the id when absent, and ``context_length`` / ``pricing`` default
-    to None / {} to keep the OpenRouter entry shape.
+    to None / {} to keep the provider model entry shape.
     """
     models: list[dict[str, Any]] = []
     for m in raw_models:
@@ -365,36 +250,6 @@ def _filter_nebius_models(
             continue
         model_id = m.get("id", "")
         name = m.get("name") or model_id
-        if (
-            query_lower
-            and query_lower not in model_id.lower()
-            and query_lower not in name.lower()
-        ):
-            continue
-        models.append(
-            {
-                "id": model_id,
-                "name": name,
-                "context_length": m.get("context_length"),
-                "pricing": m.get("pricing", {}),
-            }
-        )
-    return models
-
-
-def _filter_openrouter_models(
-    raw_models: list[Any], query_lower: str
-) -> list[dict[str, Any]]:
-    """Filter raw OpenRouter model dicts to tools-supporting, query-matching entries."""
-    models: list[dict[str, Any]] = []
-    for m in raw_models:
-        if not isinstance(m, dict):
-            continue
-        supported = m.get("supported_parameters") or []
-        if "tools" not in supported:
-            continue
-        model_id = m.get("id", "")
-        name = m.get("name", "")
         if (
             query_lower
             and query_lower not in model_id.lower()
@@ -437,25 +292,6 @@ class _ResolvedAssignment:
     scope: AssignmentScope
 
 
-# Interactive agents (Intake chat, Secretary chat) have no V1 support on the
-# Codex/Gemini/Kimi/OpenRouter providers. A GLOBAL/ROLE assignment pointing
-# them there (e.g. the one-click Codex/Gemini mode) is treated as
-# not-applicable at resolution time — they fall back to the legacy Anthropic
-# path, so a fleet-wide mode switch always yields working chats. An EXPLICIT
-# AGENT_SLUG pin is honored here and refused loudly by the orchestrator's
-# spawn guard instead — a deliberate operator choice deserves an error, not a
-# silent override. The orchestrator imports these as the single source of
-# truth for that guard.
-INTERACTIVE_AGENT_SLUGS: tuple[str, ...] = ("intake-1", "secretary-1")
-# RETIRED to empty (2026-09-17, operator directive): the selected provider
-# powers ALL agents - interactive intake/secretary included. Every provider
-# now has an interactive path (anthropic SDK, grok CLI session, or the
-# provider-generic live driver via roboco.agent_sdk.live_main), so no
-# GLOBAL/ROLE row is ever exempted back to Anthropic. The constant stays so
-# the exemption machinery + parity guard remain wired for future providers.
-INTERACTIVE_UNSUPPORTED_PROVIDERS: tuple[ModelProvider, ...] = ()
-
-
 # Capability floor: haiku-class models cannot reliably emit the structured
 # review/coordination envelopes the lifecycle now requires (pass_review's
 # criteria_verified, delegate's covers_parent_criteria, the findings ledger)
@@ -479,20 +315,16 @@ def _below_capability_floor(resolved: _ResolvedAssignment) -> bool:
     )
 
 
-def _interactive_exempt(agent_slug: str, resolved: _ResolvedAssignment) -> bool:
-    """True iff a GLOBAL/ROLE row lands an interactive agent on a
-    delivery-only provider — the resolver then keeps it on the legacy path.
-    An explicit AGENT_SLUG pin never exempts (kept out of resolve_for_agent
-    for its complexity budget)."""
-    return (
-        agent_slug in INTERACTIVE_AGENT_SLUGS
-        and resolved.provider.type in INTERACTIVE_UNSUPPORTED_PROVIDERS
-        and resolved.scope is not AssignmentScope.AGENT_SLUG
-    )
+class ProviderRoutingError(RuntimeError):
+    """An agent has a configured provider that cannot be used.
+
+    Raised instead of silently routing the agent to a different provider: the
+    operator's explicit assignment is never overridden by an automatic fallback.
+    """
 
 
 class ModelRoutingService(BaseService):
-    """Resolves per-agent routes from `model_assignments` + legacy fallback."""
+    """Resolves per-agent routes from `model_assignments` (default: Anthropic)."""
 
     service_name: ClassVar[str] = "model_routing"
 
@@ -508,49 +340,28 @@ class ModelRoutingService(BaseService):
         behavior: with no compound row ever created, this rung is a pure
         no-op regardless of what's passed here.
 
-        Never raises for a normal agent — decrypt failures, unreachable
-        self-hosted servers, and missing agents all downgrade to the
-        legacy Anthropic path, because a stalled spawn is worse than a
-        routing miss.
+        An agent with no assignment at all uses the default Anthropic route.
+        An agent whose configured provider is disabled, unreachable or has an
+        unreadable token raises `ProviderRoutingError`; it is never moved to
+        another provider automatically.
         """
         role = get_agent_role(agent_slug) or ""
         resolved = await self._resolve_assignment(agent_slug, role, complexity)
         resolved = self._floor_below_capability(agent_slug, resolved)
-        if resolved is not None and _interactive_exempt(agent_slug, resolved):
-            # A fleet-wide GLOBAL/ROLE row landed an interactive agent on a
-            # delivery-only provider (e.g. the one-click Codex/Gemini mode).
-            # Not applicable to Intake/Secretary — keep their chats working
-            # on the legacy Anthropic path. An explicit AGENT_SLUG pin is
-            # NOT exempted; the orchestrator's spawn guard refuses it loudly.
-            self.log.info(
-                "Interactive agent exempt from delivery-only provider",
-                agent_slug=agent_slug,
-                provider_type=resolved.provider.type.value,
-                scope=resolved.scope.value,
-            )
+        if resolved is None:
             return self._legacy_route(role)
-        if resolved is not None and resolved.provider.enabled:
-            route = await self._route_from_resolved(resolved, agent_slug)
-            if route is not None:
-                return route
-        elif resolved is not None and not resolved.provider.enabled:
-            # Configured but disabled — distinguishable from "no assignment"
-            # so the bypass is surfaced, not silent. Default stays graceful (a
-            # stalled spawn is worse than a routing miss); ROBOCO_ROUTING_STRICT
-            # opts into fail-closed for operators who'd rather it stall.
-            self.log.warning(
-                "Configured provider is disabled; downgrading to legacy Anthropic path",
+        if not resolved.provider.enabled:
+            self.log.error(
+                "Configured provider is disabled",
                 agent_slug=agent_slug,
                 role=role,
                 provider_id=str(resolved.provider.id),
             )
-            if settings.routing_strict:
-                raise RuntimeError(
-                    f"routing_strict: agent {agent_slug!r} has a disabled configured "
-                    f"provider {resolved.provider.id}; refusing to silently downgrade "
-                    f"to the legacy Anthropic path"
-                )
-        return self._legacy_route(role)
+            raise ProviderRoutingError(
+                f"agent {agent_slug!r} is assigned to provider "
+                f"{resolved.provider.id}, which is disabled"
+            )
+        return await self._route_from_resolved(resolved, agent_slug)
 
     async def _resolve_assignment(
         self, agent_slug: str, role: str, complexity: str | None = None
@@ -584,53 +395,53 @@ class ModelRoutingService(BaseService):
 
     async def _route_from_resolved(
         self, resolved: _ResolvedAssignment, agent_slug: str
-    ) -> AgentRoute | None:
-        """Build a route from a resolved+enabled assignment.
+    ) -> AgentRoute:
+        """Build a route from a resolved, enabled assignment.
 
-        Returns ``None`` to signal the caller should fall through to the
-        legacy Anthropic path (unreachable self-hosted server, empty
-        base_url, or a token-decrypt failure).
+        Raises `ProviderRoutingError` for an unconfigured or unreachable
+        self-hosted server or a token that cannot be decrypted.
         """
         if resolved.provider.type == ModelProvider.LOCAL:
-            return await self._local_route_or_none(resolved, agent_slug)
-        return await self._decrypt_route_or_none(resolved, agent_slug)
+            await self._require_reachable_local(resolved, agent_slug)
+        try:
+            return await self._route_from_assignment(resolved)
+        except EncryptionError as exc:
+            self.log.error(
+                "Provider token decrypt failed",
+                provider_id=str(resolved.provider.id),
+                agent_slug=agent_slug,
+            )
+            raise ProviderRoutingError(
+                f"agent {agent_slug!r}: token of provider "
+                f"{resolved.provider.id} cannot be decrypted"
+            ) from exc
 
-    async def _local_route_or_none(
+    async def _require_reachable_local(
         self, resolved: _ResolvedAssignment, agent_slug: str
-    ) -> AgentRoute | None:
-        """Route to a LOCAL provider only if it is configured and reachable.
+    ) -> None:
+        """Require a configured, reachable self-hosted server.
 
-        Probes ``{base_url}/api/tags`` first; if the server is down (or no
-        base_url is configured) returns ``None`` so the spawn falls back to
-        Anthropic — better a wrong provider than no spawn.
+        Probes ``{base_url}/api/tags``; a missing base_url or a failed probe
+        raises instead of routing the agent elsewhere.
         """
         base_url = resolved.provider.base_url or ""
         if not base_url:
-            return None  # unconfigured → fall through
+            raise ProviderRoutingError(
+                f"agent {agent_slug!r}: self-hosted provider "
+                f"{resolved.provider.id} has no base_url"
+            )
         _, error = await probe_ollama_tags(base_url)
         if error is not None:
-            self.log.warning(
-                "Self-hosted server unreachable; falling back to Anthropic",
+            self.log.error(
+                "Self-hosted server unreachable",
                 base_url=base_url,
                 error=error,
                 agent_slug=agent_slug,
             )
-            return None
-        return await self._decrypt_route_or_none(resolved, agent_slug)
-
-    async def _decrypt_route_or_none(
-        self, resolved: _ResolvedAssignment, agent_slug: str
-    ) -> AgentRoute | None:
-        """Build the route, downgrading to ``None`` on a token-decrypt failure."""
-        try:
-            return await self._route_from_assignment(resolved)
-        except EncryptionError:
-            self.log.error(
-                "Provider token decrypt failed; falling back to legacy path",
-                provider_id=str(resolved.provider.id),
-                agent_slug=agent_slug,
+            raise ProviderRoutingError(
+                f"agent {agent_slug!r}: self-hosted server {base_url} is "
+                f"unreachable: {error}"
             )
-            return None
 
     def _floor_below_capability(
         self, agent_slug: str, resolved: _ResolvedAssignment | None
@@ -737,8 +548,8 @@ class ModelRoutingService(BaseService):
         # deliberately excluded — its enable state is gated on the xAI key
         # (set_grok_api_key), unlike LOCAL/Codex/Gemini/Kimi which have no key
         # to gate on (self-hosted's own base_url + mounted-subscription auth).
-        # OPENROUTER/NEBIUS/HUMMIN ARE key-gated but still auto-enabled here
-        # (the openrouter precedent): an explicit assignment is a deliberate
+        # NEBIUS IS key-gated but still auto-enabled here: an explicit
+        # assignment is a deliberate
         # operator choice, and the spawn-time key check (ProviderError /
         # entrypoint exit 78 + park) is what actually catches a missing key.
         if provider_type_for_log in (
@@ -746,9 +557,7 @@ class ModelRoutingService(BaseService):
             ModelProvider.GEMINI,
             ModelProvider.OPENAI,
             ModelProvider.KIMI,
-            ModelProvider.OPENROUTER,
             ModelProvider.NEBIUS,
-            ModelProvider.HUMMIN,
         ):
             provider_svc = ProviderService(self.session)
             await provider_svc.update_provider(
@@ -786,10 +595,8 @@ class ModelRoutingService(BaseService):
         "codex",
         "gemini",
         "kimi",
-        "openrouter",
         "nebius",
         "zai",
-        "hummin",
         "ollama",
         "mix",
         "self_hosted",
@@ -797,7 +604,7 @@ class ModelRoutingService(BaseService):
         """Return the current "mode" label for the Settings UI.
 
         The label describes what the mode buttons author: the GLOBAL default
-        plus the plain ROLE tiers `apply_mode('hummin')` seeds. AGENT_SLUG
+        plus the plain ROLE tiers a mode seeds. AGENT_SLUG
         pins and compound ROLE":"complexity overrides are operator layers that
         survive every mode switch (see `_wipe_mode_switch_assignments`) and
         never define it — the UI surfaces those separately (per-agent
@@ -814,7 +621,6 @@ class ModelRoutingService(BaseService):
           - one GLOBAL row, KIMI                     → "kimi"
           - one GLOBAL row, NEBIUS                   → "nebius"
           - GLOBAL + ROLE tiers, all one provider    → that provider's mode
-            (the hummin shape: GLOBAL GLM default + oversight/delivery tiers)
           - anything else                            → "mix"
         """
         assignments = await self.list_assignments()
@@ -846,10 +652,8 @@ class ModelRoutingService(BaseService):
             "codex",
             "gemini",
             "kimi",
-            "openrouter",
             "nebius",
             "zai",
-            "hummin",
             "ollama",
             "self_hosted",
         ]
@@ -904,27 +708,6 @@ class ModelRoutingService(BaseService):
         # Re-fetch for the caller.
         return await self._get_seeded_provider(ModelProvider.GROK)
 
-    async def set_openrouter_api_key(self, api_key: str) -> ProviderConfigTable:
-        """Set / clear the OpenRouter provider's API key.
-
-        Empty string clears + disables; a real key Fernet-encrypts + enables.
-        Operates on the single pre-seeded OpenRouter row — no provider
-        creation happens here. The key is a standard OpenRouter API key used
-        against https://openrouter.ai/api/v1.
-        """
-        provider = await self._get_seeded_provider(ModelProvider.OPENROUTER)
-        provider_svc = ProviderService(self.session)
-        await provider_svc.update_provider(
-            require_uuid(provider.id),
-            ProviderUpdate(
-                auth_token=api_key if api_key else None,
-                clear_auth_token=not api_key,
-                enabled=bool(api_key),
-            ),
-        )
-        # Re-fetch for the caller.
-        return await self._get_seeded_provider(ModelProvider.OPENROUTER)
-
     async def set_nebius_api_key(self, api_key: str) -> ProviderConfigTable:
         """Set / clear the Nebius Token Factory provider's API key.
 
@@ -967,28 +750,6 @@ class ModelRoutingService(BaseService):
         )
         # Re-fetch for the caller.
         return await self._get_seeded_provider(ModelProvider.ZAI)
-
-    async def set_hummin_api_key(self, api_key: str) -> ProviderConfigTable:
-        """Set / clear the hummin provider's Z.ai API key.
-
-        Empty string clears + disables; a real key Fernet-encrypts + enables.
-        Operates on the single pre-seeded hummin row - no provider creation
-        happens here. The key is the operator's Z.ai key for the GLM Coding
-        Plan, injected as ZAI_API_KEY at spawn (see
-        roboco.llm.providers.hummin).
-        """
-        provider = await self._get_seeded_provider(ModelProvider.HUMMIN)
-        provider_svc = ProviderService(self.session)
-        await provider_svc.update_provider(
-            require_uuid(provider.id),
-            ProviderUpdate(
-                auth_token=api_key if api_key else None,
-                clear_auth_token=not api_key,
-                enabled=bool(api_key),
-            ),
-        )
-        # Re-fetch for the caller.
-        return await self._get_seeded_provider(ModelProvider.HUMMIN)
 
     async def resolve_provider_for_model(
         self, model_name: str
@@ -1082,21 +843,11 @@ class ModelRoutingService(BaseService):
             provider, set the GLOBAL default to a Kimi model (default
             kimi-code/k3). No key check — subscription-CLI auth
             (~/.kimi-code), same shape as Codex/Gemini.
-          - "hummin":      wipe role/global assignments, force-enable the
-            HUMMIN provider, set the GLOBAL default to a GLM model (default
-            settings.hummin_cli_model), then seed the oversight/delivery
-            role tiers (_HUMMIN_ROLE_TIERS: board/reviewer/main-PM roles on
-            the high-thinking flash variant, delivery roles on the
-            low-thinking flash variant). No key check at mode-apply time
-            (the openrouter precedent — the spawn-time key check is the
-            gate: a missing ZAI_API_KEY exits the container 78 and parks
-            the provider), same shape as kimi.
           - "nebius":      wipe role/global assignments, force-enable the
             NEBIUS provider, set the GLOBAL default to a Nebius Token
             Factory model (default settings.nebius_cli_model, an NVIDIA
-            Nemotron 3 id). No key check at mode-apply time (mirrors
-            openrouter - the spawn-time key check is the gate), same
-            provider_type_override shape.
+            Nemotron 3 id). No key check at mode-apply time (the spawn-time
+            key check is the gate), same provider_type_override shape.
           - "mix":         apply per-agent map verbatim. Any agent not in the
             map falls through to the GLOBAL default — which is whatever it
             was (preserves prior state). Self-hosted model names (not in the
@@ -1118,10 +869,8 @@ class ModelRoutingService(BaseService):
             "codex": lambda: self._apply_codex(default_model),
             "gemini": lambda: self._apply_gemini(default_model),
             "kimi": lambda: self._apply_kimi(default_model),
-            "openrouter": lambda: self._apply_openrouter(default_model),
             "nebius": lambda: self._apply_nebius(default_model),
             "zai": lambda: self._apply_zai(default_model),
-            "hummin": lambda: self._apply_hummin(default_model),
             "ollama": lambda: self._apply_ollama(default_model),
             "self_hosted": lambda: self._apply_self_hosted(default_model),
             "mix": lambda: self._apply_mix(per_agent),
@@ -1131,8 +880,8 @@ class ModelRoutingService(BaseService):
         if handler is None:
             raise ValueError(
                 f"Unknown mode '{mode}'."
-                " Use 'anthropic', 'grok', 'codex', 'gemini', 'kimi', 'openrouter',"
-                " 'nebius', 'zai', 'hummin', 'ollama', 'self_hosted', 'mix', or"
+                " Use 'anthropic', 'grok', 'codex', 'gemini', 'kimi', 'nebius',"
+                " 'zai', 'ollama', 'self_hosted', 'mix', or"
                 " 'cost_tiered'."
             )
         await handler()
@@ -1276,62 +1025,17 @@ class ModelRoutingService(BaseService):
         )
         self.log.info("Mode applied: kimi", default_model=model_name)
 
-    async def _apply_openrouter(self, default_model: str | None) -> None:
-        """Wipe assignments, set the GLOBAL default to an OpenRouter model.
-
-        OpenRouter models are NOT in the static ``MODEL_CATALOG`` — the
-        catalog is live (operator searches via GET /providers/openrouter/
-        models). The assignment is upserted with
-        ``provider_type_override=ModelProvider.OPENROUTER`` so the catalog
-        lookup is skipped and the model id is stored directly against the
-        OpenRouter provider row.
-
-        Cost-tier limitation: OpenRouter models have no rows in the
-        ``_PRICING`` table (cost is attributed from OpenRouter's own
-        metered ``usage.cost`` at the provider layer, not the static
-        per-token table), so ``input_price_per_million`` returns ``0.0``
-        for any OpenRouter model name — the cost-tiered complexity-override
-        downgrade-only comparator treats them as the cheapest tier. An
-        operator who pins a role to an OpenRouter model that is actually
-        costlier than the Anthropic baseline will not be stopped by the
-        comparator. This is a known ceiling documented here; it is
-        acceptable because the operator is making a deliberate choice
-        (the mode button or a Mix pin, not an accidental override).
-
-        AGENT_SLUG pins and complexity overrides are preserved (see
-        ``_wipe_mode_switch_assignments``).
-        """
-        await self._wipe_mode_switch_assignments()
-        # Force-enable the OPENROUTER provider row (belt-and-suspenders
-        # against a row disabled by a key clear - the mode button should
-        # route to OpenRouter regardless, and the key check is the
-        # operator's responsibility at set-time).
-        openrouter = await self._get_seeded_provider(ModelProvider.OPENROUTER)
-        provider_svc = ProviderService(self.session)
-        await provider_svc.update_provider(
-            require_uuid(openrouter.id),
-            ProviderUpdate(enabled=True),
-        )
-        model_name = default_model or "deepseek/deepseek-chat"
-        await self.upsert_assignment(
-            scope=AssignmentScope.GLOBAL,
-            scope_value=None,
-            model_name=model_name,
-            provider_type_override=ModelProvider.OPENROUTER,
-        )
-        self.log.info("Mode applied: openrouter", default_model=model_name)
-
     async def _apply_nebius(self, default_model: str | None) -> None:
         """Wipe assignments, set the GLOBAL default to a Nebius Token Factory
         model.
 
-        The ``_apply_openrouter`` twin: the operator may search the live
+        The operator may search the live
         catalog (GET /providers/nebius/models) and the four Nemotron ids are
         also static-catalog members (levels-parity batch), but a picked id
         is upserted with ``provider_type_override=ModelProvider.NEBIUS``
         regardless so it stores directly against the Nebius provider row.
 
-        Cost-tier limitation: identical to OpenRouter's - no ``_PRICING``
+        Cost-tier limitation: no ``_PRICING``
         rows (cost is attributed from the metered ``usage.cost`` at the
         provider layer), so ``input_price_per_million`` returns ``0.0`` for
         any Nebius model name and the cost-tiered complexity-override
@@ -1377,7 +1081,7 @@ class ModelRoutingService(BaseService):
         subscription + API credits, not a static per-token table), so
         ``input_price_per_million`` returns ``0.0`` for any ZAI model: the
         cost-tiered comparator treats them as the cheapest tier, same
-        known ceiling as OpenRouter: an operator pinning a costlier GLM
+        known ceiling: an operator pinning a costlier GLM
         model is making a deliberate choice.
 
         AGENT_SLUG pins and complexity overrides are preserved (see
@@ -1398,50 +1102,6 @@ class ModelRoutingService(BaseService):
             model_name=model_name,
         )
         self.log.info("Mode applied: zai", default_model=model_name)
-
-    async def _apply_hummin(self, default_model: str | None) -> None:
-        """Wipe assignments, set the GLOBAL default to a GLM (hummin) model.
-
-        The ``_apply_kimi`` twin, key-gated at SPAWN time instead (the
-        openrouter precedent): hummin models ARE in the static
-        ``MODEL_CATALOG`` (glm-5.3, glm-5.3-flash, glm-5.3-highspeed —
-        re-pointed from ZAI 2026-09-17), so the upsert needs no
-        ``provider_type_override``. The mode force-enables the row and
-        routes even without a saved key; a missing ZAI_API_KEY then fails
-        the container at hummin's own auth preflight (exit 78) and the
-        orchestrator parks the provider with the key-endpoint remediation,
-        instead of the mode button refusing outright.
-
-        AGENT_SLUG pins and complexity overrides are preserved (see
-        ``_wipe_mode_switch_assignments``).
-        """
-        await self._wipe_mode_switch_assignments()
-        hummin = await self._get_seeded_provider(ModelProvider.HUMMIN)
-        provider_svc = ProviderService(self.session)
-        await provider_svc.update_provider(
-            require_uuid(hummin.id),
-            ProviderUpdate(enabled=True),
-        )
-        model_name = default_model or settings.hummin_cli_model
-        await self.upsert_assignment(
-            scope=AssignmentScope.GLOBAL,
-            scope_value=None,
-            model_name=model_name,
-        )
-        # Seed the role tiers AFTER the wipe (which already deleted plain ROLE
-        # rows): the oversight/delivery split is part of the mode, not
-        # per-operator state. Idempotent on re-apply.
-        for role, tier_model in _HUMMIN_ROLE_TIERS:
-            await self.upsert_assignment(
-                scope=AssignmentScope.ROLE,
-                scope_value=role,
-                model_name=tier_model,
-            )
-        self.log.info(
-            "Mode applied: hummin",
-            default_model=model_name,
-            role_tiers=len(_HUMMIN_ROLE_TIERS),
-        )
 
     async def _apply_ollama(self, default_model: str | None) -> None:
         """Wipe role/global assignments, set GLOBAL to an Ollama Cloud model.
@@ -1610,9 +1270,8 @@ class ModelRoutingService(BaseService):
         can vet the whole payload before touching the DB. The `.enabled` check
         catches a preset saved while a provider was live (a key set, self-hosted
         connected, Codex/Gemini enabled) that has since gone disabled: applying
-        it would otherwise silently restore a dead assignment that resolves
-        through to the legacy Anthropic fallback at spawn — the same class of
-        bug `resolve_for_agent`'s own disabled-provider branch guards against.
+        it would otherwise restore a dead assignment that `resolve_for_agent`
+        refuses at spawn with `ProviderRoutingError`.
         Returns the parsed `(scope, scope_value, model_name)` tuple when valid,
         else `None`.
         """

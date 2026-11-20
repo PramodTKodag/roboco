@@ -3,7 +3,7 @@
 The MCP stdio transport requires stdout to hold protocol messages exclusively.
 structlog falls back to its own un-configured default (a PrintLogger on
 stdout) unless a stdio server explicitly redirects it, and the module-import
-warning that fires when the tool manifest is missing would otherwise be the
+warning that fires for a manifest naming an unimplemented verb would otherwise be the
 first bytes on the wire, before any JSON-RPC frame. In-process tests can't
 catch this: they never go through a real OS pipe, so a stray print() on the
 wrong stream doesn't show up. Only a real subprocess does.
@@ -16,13 +16,25 @@ import os
 import selectors
 import subprocess
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _STARTUP_TIMEOUT_SECONDS = 8.0
 
 
-def test_flow_server_stdout_carries_only_the_jsonrpc_response() -> None:
+def test_flow_server_stdout_carries_only_the_jsonrpc_response(
+    tmp_path: Path,
+) -> None:
+    manifest = tmp_path / "tool-manifest.json"
+    # The unknown verb makes the server log an import-time warning, the exact
+    # output that must not reach stdout.
+    manifest.write_text(
+        json.dumps({"flow_tools": ["i_am_idle", "not_a_real_verb"], "do_tools": []})
+    )
     env = os.environ.copy()
-    env["ROBOCO_ALLOW_FULL_TOOLSET"] = "1"
+    env["ROBOCO_TOOL_MANIFEST_PATH"] = str(manifest)
     env["ROBOCO_AGENT_ID"] = "test-agent"
     env["ROBOCO_AGENT_ROLE"] = "developer"
 

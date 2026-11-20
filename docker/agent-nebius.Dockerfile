@@ -11,7 +11,7 @@
 # roboco.llm.providers.nebius_cli_config) and runs `opencode run` headless.
 # One runtime image serves every one-shot delivery role - role behaviour comes
 # from the mounted system prompt / manifest / mcp-config, exactly as on the
-# Claude/kimi/codex/gemini/openrouter paths.
+# Claude/kimi/codex/gemini paths.
 #
 # V1 scope: no interactive intake/secretary variant of this image exists -
 # Nebius is one-shot delivery roles only for now.

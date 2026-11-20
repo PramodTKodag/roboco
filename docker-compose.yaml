@@ -34,8 +34,7 @@ x-orchestrator-env: &orchestrator-env
   # (Settings -> Feature Flags + Decisions Pilots). The Clef tier (self-hosted
   # 27B, $0, roboco-decisions sidecar) is the sweet-spot default and the Laya
   # tier (self-hosted 421M, also $0) the cheap fallback, both on-by-default
-  # once the master flag goes on; the OpenRouter fallback tier (Jev, the
-  # expensive option) stays OPT-IN (a deliberate spend).
+  # once the master flag goes on.
   # Pilot arming is a MIX per CEO decision 2026-09-23: cheap-failure /
   # advisory / add-only pilots ON; anything with an expensive wrong answer
   # (CEO-path routing, notification suppression, context dropping, lifecycle
@@ -49,7 +48,6 @@ x-orchestrator-env: &orchestrator-env
   ROBOCO_DECISIONS_BASE_URL: ${ROBOCO_DECISIONS_BASE_URL:-http://roboco-decisions:8100}
   ROBOCO_DECISIONS_TIER_CLEF_ENABLED: ${ROBOCO_DECISIONS_TIER_CLEF_ENABLED:-true}
   ROBOCO_DECISIONS_TIER_LAYA_ENABLED: ${ROBOCO_DECISIONS_TIER_LAYA_ENABLED:-true}
-  ROBOCO_DECISIONS_TIER_OPENROUTER_ENABLED: ${ROBOCO_DECISIONS_TIER_OPENROUTER_ENABLED:-false}
   ROBOCO_DECISIONS_PILOTS_ON: ${ROBOCO_DECISIONS_PILOTS_ON:-parking,preflight_diff,triage_failure,tool_spotlight,x_mention_triage,heal_severity,external_pr_triage,dep_update_risk,release_readiness,commit_intent,changelog_highlights,proactive_domain,idle_reaping,decision_note_sufficiency,park_cause,pre_send_completeness,findings_mapping,delta_brief,idle_legitimacy,review_queue_priority,branch_staleness,pm_closure_confidence,assembled_coherence,silent_exit}
   ROBOCO_DECISIONS_PILOTS_SHADOW: ${ROBOCO_DECISIONS_PILOTS_SHADOW:-self_heal,complexity,steer_gate,transcript_notes,plan_quality,injection_screen,intake_preroute,collision_edge,ci_watch_route,release_worthy,second_review_eligibility,segment_classify,vault_prefilter,notify_dedup,board_due_early,stranded_response,coroner_gate,secretary_nl,tg_freetext_gate,memory_distill_gate,context_pruning,budget_wrapup,board_evidence_skip,respawn_verdict,submit_now_confidence,lesson_prune}
   # Self-heal engine FULLY ARMED (CEO decision 2026-09-26): detect + notify +
@@ -379,8 +377,6 @@ x-orchestrator-volumes: &orchestrator-volumes
   - ${ROBOCO_DATA_DIR:-./data}/gemini-usage:/data/gemini-usage
   # Per-agent KIMI usage capture — same shape as grok/codex/gemini-usage.
   - ${ROBOCO_DATA_DIR:-./data}/kimi-usage:/data/kimi-usage
-  # Per-agent HUMMIN usage capture — same shape as grok/codex/gemini/kimi-usage.
-  - ${ROBOCO_DATA_DIR:-./data}/hummin-usage:/data/hummin-usage
   # Persistent logs — survive `docker compose down/up`. Orchestrator and
   # each spawned agent write structured logs here so we can audit past
   # runs instead of relying on ephemeral `docker logs`.
@@ -835,34 +831,6 @@ services:
       - agent-base-image
 
   # ==========================================================================
-  # Agent Intake (Prompter) Image Builder (persistent Agent-SDK driver the CEO
-  # chats with; not a one-shot `claude -p`)
-  # ==========================================================================
-  agent-prompter-image:
-    build:
-      context: .
-      dockerfile: docker/agent-prompter.Dockerfile
-      additional_contexts:
-        roboco-agent-base: "service:agent-base-image"
-    image: roboco-agent-prompter
-    entrypoint: ["/bin/sh", "-c", 'echo "Agent Intake image built"']
-    restart: "no"
-    depends_on:
-      - agent-base-image
-
-  agent-secretary-image:
-    build:
-      context: .
-      dockerfile: docker/agent-secretary.Dockerfile
-      additional_contexts:
-        roboco-agent-base: "service:agent-base-image"
-    image: roboco-agent-secretary
-    entrypoint: ["/bin/sh", "-c", 'echo "Agent Secretary image built"']
-    restart: "no"
-    depends_on:
-      - agent-base-image
-
-  # ==========================================================================
   # Agent PR Reviewer Image Builder (read-only reviewer of inbound external PRs)
   # ==========================================================================
   agent-pr-reviewer-image:
@@ -892,35 +860,9 @@ services:
     depends_on:
       - agent-base-image
 
-  # Interactive Grok roles (intake/secretary) — panel-driven grok-CLI sessions;
-  # built FROM roboco-agent-grok, so they depend on the Grok runtime image.
-  agent-grok-prompter-image:
-    build:
-      context: .
-      dockerfile: docker/agent-grok-prompter.Dockerfile
-      additional_contexts:
-        roboco-agent-grok: "service:agent-grok-image"
-    image: roboco-agent-grok-prompter
-    entrypoint: ["/bin/sh", "-c", 'echo "Agent Grok Prompter image built"']
-    restart: "no"
-    depends_on:
-      - agent-grok-image
-
-  agent-grok-secretary-image:
-    build:
-      context: .
-      dockerfile: docker/agent-grok-secretary.Dockerfile
-      additional_contexts:
-        roboco-agent-grok: "service:agent-grok-image"
-    image: roboco-agent-grok-secretary
-    entrypoint: ["/bin/sh", "-c", 'echo "Agent Grok Secretary image built"']
-    restart: "no"
-    depends_on:
-      - agent-grok-image
-
   # ==========================================================================
   # Agent Codex Image Builder (OpenAI via the official codex CLI). One-shot
-  # delivery roles only in V1 — no interactive prompter/secretary variant.
+  # delivery roles only.
   # ==========================================================================
   agent-codex-image:
     build:
@@ -936,8 +878,7 @@ services:
 
   # ==========================================================================
   # Agent Gemini Image Builder (Google Gemini via the official gemini CLI).
-  # One-shot delivery roles only (V1) — no interactive prompter/secretary
-  # variant exists for Gemini yet, contrast the Grok images above.
+  # One-shot delivery roles only.
   # ==========================================================================
   agent-gemini-image:
     build:
@@ -953,8 +894,7 @@ services:
 
   # ==========================================================================
   # Agent Kimi Image Builder (Moonshot AI Kimi K3 via the official kimi CLI).
-  # One-shot delivery roles only (V1) — no interactive prompter/secretary
-  # variant exists for Kimi yet, contrast the Grok images above.
+  # One-shot delivery roles only.
   # ==========================================================================
   agent-kimi-image:
     build:
@@ -969,29 +909,9 @@ services:
       - agent-base-image
 
   # ==========================================================================
-  # Agent OpenRouter Image Builder (aggregated catalog via the official
-  # opencode CLI). One-shot delivery roles only (V1) — no interactive
-  # prompter/secretary variant exists for OpenRouter, contrast the Grok
-  # images above.
-  # ==========================================================================
-  agent-openrouter-image:
-    build:
-      context: .
-      dockerfile: docker/agent-openrouter.Dockerfile
-      additional_contexts:
-        roboco-agent-base: "service:agent-base-image"
-    image: roboco-agent-openrouter
-    entrypoint: ["/bin/sh", "-c", 'echo "Agent OpenRouter image built"']
-    restart: "no"
-    depends_on:
-      - agent-base-image
-
-  # ==========================================================================
   # Agent Nebius Image Builder (Token Factory via the opencode CLI).
   # Builds the image a Nebius-routed spawn runs; routing to Nebius stays
-  # opt-in (key + Nebius mode or pins). Without it no compose service
-  # references roboco-agent-nebius, so deploy-nas.sh never builds it and
-  # the -live pass defers on its base.
+  # opt-in (key + Nebius mode or pins).
   # ==========================================================================
   agent-nebius-image:
     build:
@@ -1001,25 +921,6 @@ services:
         roboco-agent-base: "service:agent-base-image"
     image: roboco-agent-nebius
     entrypoint: ["/bin/sh", "-c", 'echo "Agent Nebius image built"']
-    restart: "no"
-    depends_on:
-      - agent-base-image
-
-  # ==========================================================================
-  # Agent Hummin Image Builder (GLM family via the GLM-native hummin CLI).
-  # One-shot delivery roles only (V1) — no interactive prompter/secretary
-  # variant exists, contrast the Grok images above. hummin has no MCP client,
-  # so the RoboCo gateway is unreachable from this image in V1 (see
-  # roboco.llm.providers.hummin).
-  # ==========================================================================
-  agent-hummin-image:
-    build:
-      context: .
-      dockerfile: docker/agent-hummin.Dockerfile
-      additional_contexts:
-        roboco-agent-base: "service:agent-base-image"
-    image: roboco-agent-hummin
-    entrypoint: ["/bin/sh", "-c", 'echo "Agent hummin image built"']
     restart: "no"
     depends_on:
       - agent-base-image

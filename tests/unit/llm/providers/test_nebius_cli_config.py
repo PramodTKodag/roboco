@@ -359,8 +359,7 @@ def test_main_creates_missing_config_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The agent image does not pre-create opencode's global config home, so
-    the render step must mkdir the parent itself (the openrouter twin's #1110
-    regression - this port predates it). Regression: every Nebius-routed spawn
+    the render step must mkdir the parent itself. Regression: every Nebius-routed spawn
     exited 1 on FileNotFoundError before the CLI started. The plugin write
     already mkdir'd its parents; the config write did not."""
     mcp_path = tmp_path / "mcp-config.json"

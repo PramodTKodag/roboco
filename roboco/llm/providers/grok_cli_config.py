@@ -85,8 +85,8 @@ _FULL_REASONING_OVERRIDES = frozenset({"default", "full", "none", ""})
 _BASH_ROLES = frozenset({"developer", "documenter", "cell_pm", "main_pm"})
 
 # Fleet-wide subagent ban (CEO, 2026-07-09): no role — intake included — spawns
-# CLI subagents; the Claude path mirrors this via ``_INTAKE_BASE_TOOLS``
-# (intake_driver) and ``role_config.allows_subagent``. Work is driven through
+# CLI subagents; the Claude path mirrors this via
+# ``role_config.allows_subagent``. Work is driven through
 # the gateway verbs.
 _SUBAGENT_ALLOWED_ROLES: frozenset[str] = frozenset()
 

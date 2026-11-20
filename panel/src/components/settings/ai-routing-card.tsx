@@ -9,15 +9,12 @@ import {
   useDeleteComplexityOverride,
   useDeletePreset,
   useGrokKey,
-  useHumminKey,
   useNebiusKey,
   useOllamaKey,
-  useOpenRouterKey,
   useRoutingMode,
   useRoutingPresets,
   useSavePreset,
   useSearchNebiusModels,
-  useSearchOpenRouterModels,
   useSetComplexityOverride,
   useSetGrokKey,
   useSetOllamaKey,
@@ -51,7 +48,6 @@ import {
   Cpu,
   Gauge,
   Gem,
-  Globe,
   Key,
   KeyRound,
   Moon,
@@ -66,15 +62,12 @@ import {
   COMPLEXITY_OVERRIDE_ROLES,
   type ComplexityLevel,
   type NebiusModel,
-  type OpenRouterModel,
   type SelfHostedModel,
 } from "@/lib/api/providers";
 import type { RoutingMode, SelfHostedTestResult } from "@/lib/api/providers";
 import { SelfHostedSection } from "@/components/settings/self-hosted-section";
 import {
-  HumminProviderKeyRow,
   NebiusProviderKeyRow,
-  OpenRouterProviderKeyRow,
   ZaiProviderKeyRow,
 } from "@/components/settings/provider-key-card";
 import { Badge } from "@/components/ui/badge";
@@ -173,16 +166,14 @@ const COMPLEXITY_ROLE_LABELS: Record<string, string> = {
   documenter: "Documenter",
 };
 
-// OpenRouter models come from the shared contract in @/lib/api/providers
-// (OpenRouterModel, mirrored from the backend's OpenRouterModelEntry):
-// prompt_price / completion_price / context_length are all nullable because
-// OpenRouter's catalog genuinely contains unpriced models. The Nebius search
-// reuses the same shape (NebiusModel is an alias), mostly-null for Nebius.
+// Nebius models come from the shared contract in @/lib/api/providers
+// (NebiusModel, an alias of the backend's ProviderModelEntry): prompt_price /
+// completion_price / context_length are all nullable because the catalog can
+// carry unpriced models.
 
 // Format a per-token price as human-readable per-million-token, e.g.
-// 0.000003 → "$3.00/1M". Null/undefined (both search endpoints leave prices
-// null when the catalog carries none) or zero/negative (OpenRouter's "-1"
-// unknown-price sentinel) → "—"; sub-cent per-million values keep a third
+// 0.000003 → "$3.00/1M". Null/undefined (the search endpoint leaves prices
+// null when the catalog carries none) or zero/negative → "—"; sub-cent per-million values keep a third
 // decimal so they don't render as "$0.00/1M".
 function formatPricePerMillion(price: number | null | undefined): string {
   if (price == null) return "—";
@@ -193,30 +184,9 @@ function formatPricePerMillion(price: number | null | undefined): string {
     : `$${perMillion.toFixed(2)}/1M`;
 }
 
-// Surface specific OpenRouter failure reasons instead of a generic message
-// (HoM UX requirement c): 400 = no key, 401 = auth, 429 = rate limit, timeout.
-function openRouterSearchErrorMessage(error: unknown): string {
-  if (error && typeof error === "object" && "response" in error) {
-    const status = (error as { response?: { status?: number } }).response
-      ?.status;
-    if (status === 400)
-      return "OpenRouter API key not set — save your key above first.";
-    if (status === 401)
-      return "OpenRouter auth failure — your API key may be invalid or expired.";
-    if (status === 429)
-      return "OpenRouter rate limit — too many requests, try again in a moment.";
-  }
-  if (error && typeof error === "object" && "code" in error) {
-    const code = (error as { code?: string }).code;
-    if (code === "ECONNABORTED" || code === "ETIMEDOUT")
-      return "OpenRouter search timed out — try again in a moment.";
-  }
-  return "OpenRouter API is unavailable — try again in a moment.";
-}
-
 // Surface specific Nebius failure reasons instead of a generic message
-// (mirrors openRouterSearchErrorMessage above): 400 = no key, 401 = auth,
-// 429 = rate limit, timeout.
+// (HoM UX requirement c): 400 = no key, 401 = auth, 429 = rate limit,
+// timeout.
 function nebiusSearchErrorMessage(error: unknown): string {
   if (error && typeof error === "object" && "response" in error) {
     const status = (error as { response?: { status?: number } }).response
@@ -336,33 +306,9 @@ export function AIRoutingCard() {
     }
   };
 
-  // --- OpenRouter API key status + model search ---
-  const { data: openRouterKeyStatus } = useOpenRouterKey();
-  const hasOpenRouterKey = !!openRouterKeyStatus?.has_key;
   // --- Z.ai API key status (key row lives in ZaiProviderKeyRow) ---
   const { data: zaiKeyStatus } = useZaiKey();
   const hasZaiKey = !!zaiKeyStatus?.has_key;
-  // --- hummin (GLM Coding Plan) key status (row lives in
-  // HumminProviderKeyRow) — the ZAI row's key does NOT carry over; the
-  // providers stay independent.
-  const { data: humminKeyStatus } = useHumminKey();
-  const hasHumminKey = !!humminKeyStatus?.has_key;
-  const [openRouterModel, setOpenRouterModel] = useState("");
-  const [openRouterSearch, setOpenRouterSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(openRouterSearch), 300);
-    return () => clearTimeout(timer);
-  }, [openRouterSearch]);
-
-  const {
-    data: openRouterModels,
-    isLoading: openRouterSearchLoading,
-    isError: openRouterSearchError,
-    error: openRouterSearchErr,
-  } = useSearchOpenRouterModels(debouncedSearch, hasOpenRouterKey);
-
   // --- Nebius API key status + model search ---
   const { data: nebiusKeyStatus } = useNebiusKey();
   const hasNebiusKey = !!nebiusKeyStatus?.has_key;
@@ -428,10 +374,6 @@ export function AIRoutingCard() {
   const catalogNebiusOnly = catalog.filter(
     (c: { provider_type: ModelProvider }) =>
       c.provider_type === ModelProvider.NEBIUS,
-  );
-  const catalogHumminOnly = catalog.filter(
-    (c: { provider_type: ModelProvider }) =>
-      c.provider_type === ModelProvider.HUMMIN,
   );
   const catalogAnthropicOnly = catalog.filter(
     (c: { provider_type: ModelProvider }) =>
@@ -558,32 +500,6 @@ export function AIRoutingCard() {
     }
   };
 
-  const flipToOpenRouter = async () => {
-    if (!hasOpenRouterKey) {
-      toast.error("Save the OpenRouter API key first");
-      return;
-    }
-    if (
-      !confirm(
-        "Switch every agent to OpenRouter? Per-agent pins and complexity " +
-          "overrides are kept; other role/global assignments are replaced. " +
-          "V1: delivery roles only, not Intake/Secretary.",
-      )
-    )
-      return;
-    try {
-      await applyMode.mutateAsync({
-        mode: "openrouter",
-        ...(openRouterModel ? { default_model: openRouterModel } : {}),
-      });
-      toast.success(
-        "Role/global routing now on OpenRouter — per-agent pins and complexity overrides kept",
-      );
-    } catch (e) {
-      toast.error("Switch failed: " + errMsg(e));
-    }
-  };
-
   const flipToNebius = async () => {
     if (!hasNebiusKey) {
       toast.error("Save the Nebius API key first");
@@ -626,29 +542,6 @@ export function AIRoutingCard() {
       await applyMode.mutateAsync({ mode: "zai" });
       toast.success(
         "Role/global routing now on Z.ai GLM — per-agent pins and complexity overrides kept",
-      );
-    } catch (e) {
-      toast.error("Switch failed: " + errMsg(e));
-    }
-  };
-
-  const flipToHummin = async () => {
-    if (!hasHumminKey) {
-      toast.error("Save the hummin (GLM Coding Plan) key first");
-      return;
-    }
-    if (
-      !confirm(
-        "Switch every agent to GLM via the hummin CLI? Per-agent pins and " +
-          "complexity overrides are kept; other role/global assignments " +
-          "are replaced.",
-      )
-    )
-      return;
-    try {
-      await applyMode.mutateAsync({ mode: "hummin" });
-      toast.success(
-        "Role/global routing now on GLM (hummin) — per-agent pins and complexity overrides kept",
       );
     } catch (e) {
       toast.error("Switch failed: " + errMsg(e));
@@ -1014,23 +907,6 @@ export function AIRoutingCard() {
         </SelectGroup>
       )}
 
-      {/* hummin (GLM via the GLM-native CLI) models */}
-      {catalogHumminOnly.length > 0 && (
-        <SelectGroup>
-          <SelectLabel>
-            <ProviderBadge variant="hummin" />
-            GLM (hummin)
-          </SelectLabel>
-          {catalogHumminOnly.map(
-            (c: { model_name: string; display_name: string }) => (
-              <SelectItem key={c.model_name} value={c.model_name}>
-                {c.display_name}
-              </SelectItem>
-            ),
-          )}
-        </SelectGroup>
-      )}
-
       {/* Ollama Cloud models */}
       {catalogOllamaOnly.length > 0 && (
         <SelectGroup>
@@ -1084,7 +960,7 @@ export function AIRoutingCard() {
         <CardDescription>
           Decide which model backs each agent. Anthropic uses the mounted
           <code className="px-1"> ~/.claude </code> auth; Grok (xAI), Ollama
-          Cloud, OpenRouter, and Nebius use the API keys you save below; Codex,
+          Cloud and Nebius use the API keys you save below; Codex,
           Gemini, and Kimi authenticate via their own mounted CLI subscriptions
           (no key needed) — V1: delivery roles only, not Intake/Secretary;
           Self-Hosted connects to any OpenAI-compatible endpoint you run
@@ -1207,18 +1083,11 @@ export function AIRoutingCard() {
             )}
           </section>
 
-          {/* -------- OpenRouter key -------- */}
-          <OpenRouterProviderKeyRow />
-
           {/* -------- Z.ai key -------- */}
           <ZaiProviderKeyRow />
 
           {/* -------- Nebius key -------- */}
           <NebiusProviderKeyRow />
-
-          {/* -------- hummin (GLM Coding Plan) key — independent of the
-             ZAI row's key on purpose (separate providers, separate keys) */}
-          <HumminProviderKeyRow />
         </div>
 
         <Separator />
@@ -1234,7 +1103,7 @@ export function AIRoutingCard() {
 
         {/* -------- Mode toggle -------- */}
         <section className="space-y-3">
-          <HelpTip label="Anthropic / Grok / Codex / Gemini / Kimi / Ollama / OpenRouter / Nebius / Self-Hosted replace role/global routing with that provider; per-agent pins in the table below survive the switch. Mix keeps whatever's picked in the table.">
+          <HelpTip label="Anthropic / Grok / Codex / Gemini / Kimi / Ollama / Nebius / Self-Hosted replace role/global routing with that provider; per-agent pins in the table below survive the switch. Mix keeps whatever's picked in the table.">
             <Label className="text-sm font-medium">Routing mode</Label>
           </HelpTip>
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2">
@@ -1298,19 +1167,6 @@ export function AIRoutingCard() {
               disabled={applyMode.isPending || !hasOllamaKey}
             />
             <ModeButton
-              icon={<Globe className="h-4 w-4" />}
-              label="OpenRouter"
-              description={
-                hasOpenRouterKey
-                  ? "Every agent uses OpenRouter (pick a model below)."
-                  : "Save the OpenRouter key first."
-              }
-              active={currentMode === "openrouter"}
-              onClick={flipToOpenRouter}
-              disabled={applyMode.isPending || !hasOpenRouterKey}
-              labelHint="One key unlocks hundreds of models on OpenRouter — GLM, DeepSeek, Qwen, Claude, GPT and more. Pick a model in the search picker below. V1: delivery roles only, not offered for Intake/Secretary."
-            />
-            <ModeButton
               icon={<Cloud className="h-4 w-4" />}
               label="Nebius"
               description={
@@ -1322,19 +1178,6 @@ export function AIRoutingCard() {
               onClick={flipToNebius}
               disabled={applyMode.isPending || !hasNebiusKey}
               labelHint="One key unlocks Nebius AI Studio's hosted open models (DeepSeek, Qwen, Llama and more). Pick a model in the search picker below. V1: delivery roles only, not offered for Intake/Secretary."
-            />
-            <ModeButton
-              icon={<Sparkles className="h-4 w-4" />}
-              label="Hummin (GLM)"
-              description={
-                hasHumminKey
-                  ? "Every agent uses GLM via the hummin CLI."
-                  : "Save the hummin (GLM Coding Plan) key first."
-              }
-              active={currentMode === "hummin"}
-              onClick={flipToHummin}
-              disabled={applyMode.isPending || !hasHumminKey}
-              labelHint="The GLM go-to: the GLM-native hummin CLI headless in Docker, key injected as ZAI_API_KEY. GLM 5.3 / 5.3 Flash / 5.3 Highspeed in the Mix picker. V1: delivery roles only, not offered for Intake/Secretary."
             />
             <ModeButton
               icon={<Server className="h-4 w-4" />}
@@ -1417,15 +1260,6 @@ export function AIRoutingCard() {
               Intake/Secretary.
             </p>
           ) : null}
-          {currentMode === "openrouter" || currentMode === "mix" ? (
-            <p className="text-xs text-muted-foreground">
-              OpenRouter agents run on the opencode CLI; one API key unlocks
-              hundreds of models (GLM, DeepSeek, Qwen, Claude, GPT and more).
-              The same command / secret-exfiltration guard, prompt-injection
-              guard, and per-agent cost cap all apply. V1: delivery roles only —
-              not available for Intake/Secretary.
-            </p>
-          ) : null}
           {currentMode === "nebius" || currentMode === "mix" ? (
             <p className="text-xs text-muted-foreground">
               Nebius agents run on the opencode CLI; one API key unlocks Nebius
@@ -1474,88 +1308,6 @@ export function AIRoutingCard() {
                   ))}
                 </SelectContent>
               </Select>
-            </section>
-          </>
-        )}
-
-        {/* -------- OpenRouter model picker (when openrouter mode active) -------- */}
-        {currentMode === "openrouter" && (
-          <>
-            <Separator />
-            <section className="space-y-2">
-              <Label className="text-sm font-medium">
-                OpenRouter default model
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                Search OpenRouter&apos;s catalog and pick a model for all agents
-                in OpenRouter mode. Pricing shown per million tokens.
-              </p>
-              <Input
-                type="text"
-                value={openRouterSearch}
-                onChange={(e) => setOpenRouterSearch(e.target.value)}
-                placeholder="Search models…"
-                className="w-full max-w-sm"
-                disabled={!hasOpenRouterKey}
-              />
-              {!hasOpenRouterKey ? (
-                <p className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-600">
-                  <AlertTriangle className="h-3 w-3 shrink-0" />
-                  Save your OpenRouter API key above to search and pick models.
-                </p>
-              ) : openRouterSearchError && debouncedSearch ? (
-                <p className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-600">
-                  <AlertTriangle className="h-3 w-3 shrink-0" />
-                  {openRouterSearchErrorMessage(openRouterSearchErr)}
-                </p>
-              ) : openRouterSearchLoading && debouncedSearch ? (
-                <p className="text-xs text-muted-foreground">Searching…</p>
-              ) : openRouterModels && openRouterModels.length > 0 ? (
-                <div className="max-h-64 overflow-y-auto rounded-md border">
-                  {openRouterModels.map((m: OpenRouterModel) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => setOpenRouterModel(m.id)}
-                      className={
-                        "flex w-full items-center justify-between p-2 text-left text-xs hover:bg-muted/50 " +
-                        (openRouterModel === m.id ? "bg-primary/5" : "")
-                      }
-                    >
-                      <div className="min-w-0">
-                        <div className="font-medium truncate">{m.name}</div>
-                        <div className="text-muted-foreground font-mono truncate">
-                          {m.id}
-                        </div>
-                        {m.context_length != null && m.context_length > 0 && (
-                          <div className="text-muted-foreground">
-                            {m.context_length.toLocaleString()} ctx
-                          </div>
-                        )}
-                      </div>
-                      <div className="ml-2 shrink-0 text-right">
-                        <div>{formatPricePerMillion(m.prompt_price)} in</div>
-                        <div className="text-muted-foreground">
-                          {formatPricePerMillion(m.completion_price)} out
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              ) : openRouterModels &&
-                openRouterModels.length === 0 &&
-                debouncedSearch &&
-                !openRouterSearchLoading ? (
-                <p className="rounded-md border p-3 text-xs text-muted-foreground">
-                  No models found for &quot;{debouncedSearch}&quot;. Try a
-                  different search.
-                </p>
-              ) : null}
-              {openRouterModel && (
-                <p className="text-xs text-muted-foreground">
-                  Selected: <span className="font-mono">{openRouterModel}</span>
-                </p>
-              )}
             </section>
           </>
         )}
@@ -1988,9 +1740,7 @@ function ProviderBadge({
     | "kimi"
     | "nebius"
     | "ollama"
-    | "self-hosted"
-    | "openrouter"
-    | "hummin";
+    | "self-hosted";
 }) {
   const styles: Record<string, string> = {
     anthropic: "bg-blue-500/20 text-blue-700 dark:text-blue-400",
@@ -2001,8 +1751,6 @@ function ProviderBadge({
     gemini: "bg-sky-500/20 text-sky-700 dark:text-sky-400",
     kimi: "bg-amber-500/20 text-amber-700 dark:text-amber-400",
     nebius: "bg-lime-500/20 text-lime-700 dark:text-lime-400",
-    openrouter: "bg-indigo-500/20 text-indigo-700 dark:text-indigo-400",
-    hummin: "bg-rose-500/20 text-rose-700 dark:text-rose-400",
   };
   const labels: Record<string, string> = {
     anthropic: "A",
@@ -2013,8 +1761,6 @@ function ProviderBadge({
     gemini: "Ge",
     kimi: "K",
     nebius: "N",
-    openrouter: "OR",
-    hummin: "H",
   };
   return (
     <span

@@ -12,9 +12,9 @@ event:
 
 This module sums the ``step_finish`` events' ``part.tokens`` and
 ``part.cost`` across the whole run and writes the grok-shaped 4-bucket
-``usage.json`` the orchestrator reads back at finalize. It is the Nebius twin
-of :mod:`roboco.llm.providers.openrouter_cli_usage` - same event shape, same
-4-bucket mapping, different env-var names.
+``usage.json`` the orchestrator reads back at finalize. It reads the
+opencode ``--format json`` event shape and maps it to the same 4 buckets
+as the other CLI providers.
 
 **Cost comes from Token Factory's metered ``cost`` field, NOT the static
 ``_PRICING`` table.** Nebius charges per-request and reports the charge in

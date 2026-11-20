@@ -175,7 +175,7 @@ async def decide_for_pilot(
         resolved_mode = await pilot_mode(session, pilot)
         if resolved_mode is PilotMode.OFF:
             return resolved_mode, None
-        return resolved_mode, await resolve_endpoint(session)
+        return resolved_mode, await resolve_endpoint()
 
     try:
         begin_nested = getattr(session, "begin_nested", None)
@@ -780,7 +780,7 @@ TOOL_SPOTLIGHT_MIN_VERBS = 8
 TOOL_SPOTLIGHT_MAX_VERBS = 20
 TOOL_SPOTLIGHT_MIN_HIGHLIGHTS = 5
 TOOL_SPOTLIGHT_MAX_HIGHLIGHTS = 7
-# Many-option choice is the model's weakest surface (Hummin's measured
+# Many-option choice is the model's weakest surface (the measured
 # gray-zone operating point is 0.7; a 20-way pick does not get a
 # discount).
 TOOL_SPOTLIGHT_CONFIDENCE_FLOOR = 0.7

@@ -4,9 +4,8 @@ Nebius Token Factory (https://tokenfactory.nebius.com) is Nebius's
 OpenAI-compatible inference API serving 60+ open models (NVIDIA Nemotron,
 DeepSeek, Qwen, Llama, ...) behind one metered API key speaking the OpenAI
 Chat Completions protocol at ``https://api.tokenfactory.nebius.com/v1``.
-RoboCo runs Nebius agents through the opencode CLI (``opencode run``) the
-same way it runs OpenRouter agents: the orchestrator's shared container
-assembly mounts the RoboCo MCP gateway (``mcp-config.json``), the agent HMAC
+RoboCo runs Nebius agents through the opencode CLI (``opencode run``): the orchestrator's
+shared container assembly mounts the RoboCo MCP gateway (``mcp-config.json``), the agent HMAC
 identity, and the git context; this provider adds the runtime env the
 opencode entrypoint reads (NEBIUS_API_KEY + NEBIUS_BASE_URL + the rendered
 opencode.json), then launches the ``roboco-agent-nebius`` image - whose
@@ -211,7 +210,7 @@ class NebiusProvider(AgentProvider):
 
         ``NEBIUS_API_KEY`` / ``NEBIUS_BASE_URL`` are the static metered
         credential (the Ollama shape - no refresh loop; Token Factory has no
-        attribution-header surface, unlike OpenRouter's HTTP-Referer/X-Title).
+        attribution-header surface).
         ``ROBOCO_AGENT_ID`` lets the renderer compute the per-role
         permission deny-rules; ``ROBOCO_MCP_CONFIG`` points it at the mounted
         gateway config; the prompt travels as an env var (never an argv
@@ -226,7 +225,7 @@ class NebiusProvider(AgentProvider):
         env: list[str] = [
             "-e",
             # UUID, not slug: the agent token is signed over the UUID
-            # (see hummin.py), a slug here 401s every gateway call.
+            # a slug here 401s every gateway call.
             f"ROBOCO_AGENT_ID={AGENT_UUIDS.get(config.agent_id, config.agent_id)}",
             "-e",
             f"ROBOCO_AGENT_MODEL={opencode_model_ref(model)}",

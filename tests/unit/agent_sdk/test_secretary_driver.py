@@ -117,9 +117,3 @@ async def test_network_error_returns_error_dict(
 
     out = await sd._do_read_state(client=_client(handler))
     assert out["error"] == "request_failed"
-
-
-def test_text_result_shape() -> None:
-    result = sd._text_result({"a": 1})
-    assert result["content"][0]["type"] == "text"
-    assert json.loads(result["content"][0]["text"]) == {"a": 1}

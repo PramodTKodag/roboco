@@ -1,13 +1,11 @@
 """Tests for NebiusProvider (any Nebius Token Factory model via opencode CLI).
 
-Mirrors ``test_openrouter_provider.py``'s coverage - the same safety
-properties matter here, with the Ollama shape shared: a static metered API
-key injected via env (NEBIUS_API_KEY + NEBIUS_BASE_URL), NO ``~/.`` auth
-mount, NO ``_auth.py`` refresh loop. The provider routing fields are blanked
-before the shared mount step (same pattern) so the Nebius endpoint is never
-mislabelled ANTHROPIC_*; this provider re-injects them under the Nebius env
-names. The ONE decisive contrast with OpenRouter: no attribution-header
-surface (Token Factory has no HTTP-Referer/X-Title equivalent).
+Safety properties: a static metered API key injected via env (NEBIUS_API_KEY
++ NEBIUS_BASE_URL), NO ``~/.`` auth mount, NO ``_auth.py`` refresh loop. The
+provider routing fields are blanked before the shared mount step so the Nebius
+endpoint is never mislabelled ANTHROPIC_*; this provider re-injects them under
+the Nebius env names. Token Factory has no attribution-header surface
+(HTTP-Referer/X-Title equivalent).
 """
 
 from __future__ import annotations
@@ -197,9 +195,8 @@ async def test_nebius_spawn_injects_key_and_base_url_via_env() -> None:
 
 
 async def test_nebius_spawn_no_attribution_headers() -> None:
-    # The decisive contrast with OpenRouter: Token Factory has no
-    # attribution-header surface (HTTP-Referer / X-Title), so no such env
-    # var is ever injected regardless of settings.
+    # Token Factory has no attribution-header surface (HTTP-Referer /
+    # X-Title), so no such env var is ever injected regardless of settings.
     host = _FakeHost()
     provider = NebiusProvider(host, image="roboco-agent-nebius:test")
     with patch(
@@ -208,7 +205,6 @@ async def test_nebius_spawn_no_attribution_headers() -> None:
         await provider.spawn(_config())
     cmd = list(exec_mock.call_args.args)
     assert not any(c.startswith("HTTP_REFERER=") for c in cmd)
-    assert not any(c.startswith("X_OPENROUTER_TITLE=") for c in cmd)
 
 
 # ---------------------------------------------------------------------------

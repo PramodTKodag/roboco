@@ -10,9 +10,8 @@
 # image serves every one-shot delivery role — role behaviour comes from the
 # mounted system prompt / manifest / mcp-config, exactly as on the grok path.
 #
-# V1 scope: no interactive intake/secretary variant of this image exists (unlike
-# grok's agent-grok-prompter / agent-grok-secretary) — Codex is one-shot delivery
-# roles only for now.
+# V1 scope: one-shot delivery roles only; there is no interactive
+# intake/secretary variant of this image.
 # =============================================================================
 
 FROM roboco-agent-base

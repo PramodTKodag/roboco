@@ -153,7 +153,7 @@ set -e
 # false-positive a raw grep by construction - nebius_cli_sniff extracts
 # ONLY structured `type: "error"` JSONL event fields plus stderr and
 # classifies THAT, never stdout's echoed assistant/tool content. Mirrors
-# the kimi/codex/grok/gemini/openrouter entrypoints' exit-75/78 convention
+# the kimi/codex/grok/gemini entrypoints' exit-75/78 convention
 # so the orchestrator's existing park-and-probe logic, scoped by
 # provider_type, handles all six providers identically:
 #   - rate-limit/quota -> exit 75 (EX_TEMPFAIL): the orchestrator PARKS the

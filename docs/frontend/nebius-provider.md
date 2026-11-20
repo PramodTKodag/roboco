@@ -44,7 +44,7 @@ providersApi.searchNebiusModels(query: string): Promise<NebiusModel[]>
 
 ## Hooks
 
-All three are in `panel/src/hooks/use-providers.ts` and follow the same TanStack Query shape as the OpenRouter hooks: `useNebiusKey()` (60s staleTime), `useSetNebiusKey()` (invalidates the `nebiusKey` and `mode` query keys), and `useSearchNebiusModels(query, enabled)` (query guarded inside the hook on `enabled && query.length > 0`, keyed on the raw query string, 60s staleTime; debounce the input in the UI).
+All three are in `panel/src/hooks/use-providers.ts` and follow the same TanStack Query shape as the other provider hooks: `useNebiusKey()` (60s staleTime), `useSetNebiusKey()` (invalidates the `nebiusKey` and `mode` query keys), and `useSearchNebiusModels(query, enabled)` (query guarded inside the hook on `enabled && query.length > 0`, keyed on the raw query string, 60s staleTime; debounce the input in the UI).
 
 ```ts
 const { data: keyStatus } = useNebiusKey();
@@ -54,7 +54,7 @@ const { data: models, isLoading } = useSearchNebiusModels(query, hasKey && query
 
 ## Usage notes for the UI
 
-- The key row (`NebiusProviderKeyRow` in `provider-key-card.tsx`) mirrors the OpenRouter row: password input with Save/Clear, the green "Saved" badge only after the mutation's `onSuccess`, cleared on any input change.
+- The key row (`NebiusProviderKeyRow` in `provider-key-card.tsx`) is a password input with Save/Clear, the green "Saved" badge only after the mutation's `onSuccess`, cleared on any input change.
 - The model picker renders null-safe pricing rows ("-" for a missing price) and omits the context line when `context_length` is null.
 - `ModelProvider.NEBIUS` is the enum value for provider-type discriminators; `"nebius"` is a valid `RoutingMode` value for the mode buttons and `applyMode` payloads.
 - Per-agent Mix-mode pins ARE supported (levels-parity batch, 2026-09-14): the four live-verified Nemotron ids are `MODEL_CATALOG` members under `ModelProvider.NEBIUS`, so the Mix select offers a Nebius group (badge "N", lime) and the complexity-override validator resolves them. Nebius is excluded from the interactive-only group's options exactly like Codex/Gemini/Kimi (one-shot V1, no interactive Intake/Secretary image). No `_PRICING` rows exist yet (no grounded published rates), so the cost-tier comparator ranks Nebius models cheapest-tier (0.0) - the same documented ceiling as OpenRouter.

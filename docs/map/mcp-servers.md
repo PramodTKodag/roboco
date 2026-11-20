@@ -51,11 +51,11 @@ The `roboco/mcp` package is the agent-side MCP gateway: a set of `MCPServer` (mc
 | `_TOOLS` (flow) | dict | `flow_server.py:879` | Verb name → Python impl map (27 verbs). `pass`/`fail` keys bridge the `pass_review`/`fail_review` IntentSpec names. |
 | `_INTENT_TO_PUBLIC` | dict | `flow_server.py:929` | `pass_review`→`pass`, `fail_review`→`fail` — fixes the dogfood gap where QA tools were silently dropped. |
 | `_load_manifest_flow_tools` | func | `flow_server.py:935` | Read `/app/tool-manifest.json` `flow_tools`; None if missing/unreadable. |
-| `_register_tools` (flow) | func | `flow_server.py:965` | Raise `RuntimeError` if manifest missing and `ROBOCO_ALLOW_FULL_TOOLSET` not set; if set, registers full tool set as dev/test escape hatch. |
+| `_register_tools` (flow) | func | `flow_server.py:965` | Raise `RuntimeError` if manifest missing; no override. |
 | `_REGISTERED_TOOLS` (flow) | var | `flow_server.py:1024` | Import-time registration side effect. |
 | `_TOOLS` (do) | dict | `do_server.py:863` | Tool name → impl map (21 content tools, incl. `propose_roadmap`). |
 | `_load_manifest_do_tools` | func | `do_server.py:866` | Read manifest `do_tools` list. |
-| `_register_tools` (do) | func | `do_server.py:896` | Manifest-scoped registration; raise `RuntimeError` if manifest missing (unless `ROBOCO_ALLOW_FULL_TOOLSET` set). |
+| `_register_tools` (do) | func | `do_server.py:896` | Manifest-scoped registration; raise `RuntimeError` if manifest missing; no override. |
 | `give_me_work` … `i_am_idle` | verb funcs | `flow_server.py:491–625` | Dev verbs. |
 | `claim_review` / `pass_review` / `fail_review` | verb funcs | `flow_server.py:628–653` | QA verbs (registered as `pass`/`fail`). |
 | `claim_pr_review` / `post_pr_review` / `claim_gate_review` / `pr_pass` / `pr_fail` | verb funcs | `flow_server.py:656–876` | PR-reviewer verbs (inbound + in-path gate). |
@@ -93,7 +93,7 @@ The `roboco/mcp` package is the agent-side MCP gateway: a set of `MCPServer` (mc
 
 ## Data Flow
 
-Every server is launched as its own subprocess (`uv run --no-sync python -m roboco.mcp.<name> [agent_id]`) by the orchestrator's `_generate_mcp_config` (for flow/do/git-readonly/optimal/docs/search) or by the grok intake/secretary mains (for intake/secretary). At import time the flow/do servers read `/app/tool-manifest.json` (env `ROBOCO_TOOL_MANIFEST_PATH`) and register only the verbs/tools listed for the role — refusing to start if the manifest is missing, unless `ROBOCO_ALLOW_FULL_TOOLSET` is set (dev/test only; the all-tools fallback was the original bug that let PMs see dev verbs and 404). The optimal/docs/search/intake/secretary/git-readonly servers register their full tool surface unconditionally (role gating is server-side at the route).
+Every server is launched as its own subprocess (`uv run --no-sync python -m roboco.mcp.<name> [agent_id]`) by the orchestrator's `_generate_mcp_config` (for flow/do/git-readonly/optimal/docs/search) or by the grok intake/secretary mains (for intake/secretary). At import time the flow/do servers read `/app/tool-manifest.json` (env `ROBOCO_TOOL_MANIFEST_PATH`) and register only the verbs/tools listed for the role — refusing to start if the manifest is missing (the all-tools fallback was the original bug that let PMs see dev verbs and 404). The optimal/docs/search/intake/secretary/git-readonly servers register their full tool surface unconditionally (role gating is server-side at the route).
 
 When an agent calls a tool:
 
@@ -173,13 +173,13 @@ roboco/mcp/
 │   ├── PM verbs: triage, triage_all, unblock, complete, escalate_up, i_will_plan, delegate, submit_up, submit_root
 │   ├── Board/Main-PM: escalate_to_ceo
 │   ├── _TOOLS / _INTENT_TO_PUBLIC
-│   └── _load_manifest_flow_tools / _register_tools (fails loud if no manifest; ROBOCO_ALLOW_FULL_TOOLSET escape hatch)
+│   └── _load_manifest_flow_tools / _register_tools (fails loud if no manifest)
 ├── do_server.py             # roboco-do (content tools)
 │   ├── mirror breaker machinery (_CIRCUIT_REJECTION_KINDS, _DICT_ERROR_CODE_MAP, _classify_*, _remediate_for_kind, _normalize_exception_envelope, _record_and_check_circuit)
 │   ├── commit, note (handoff done/next), pitch, propose_roadmap, dm, notify, evidence
 │   ├── progress, notify_list/get/ack, pr_update, read_messages
 │   ├── draft_playbook, approve_playbook, reject_playbook, archive_playbook
-│   └── _TOOLS / _load_manifest_do_tools / _register_tools (fails loud; ROBOCO_ALLOW_FULL_TOOLSET escape hatch)
+│   └── _TOOLS / _load_manifest_do_tools / _register_tools (fails loud)
 ├── optimal_server.py        # roboco-optimal (RAG/KB)
 │   ├── RecordDecisionInput, normalize_index_types (docs→documentation)
 │   ├── _register_search_tools (kb_search, rag_query, kb_stats)
@@ -262,14 +262,13 @@ Env vars read in this slice (all `ROBOCO_*`):
 | `settings.internal_api_url` | utils `ApiClient.base_url` | Base URL for optimal/docs/search async calls. |
 | `ROBOCO_DOCS_SITE_PROJECT_SLUG` (default `"roboco-website"`) | `services/docs.py` `_refused_doc_types` | Deployer-configurable project slug named in the `write_doc(doc_type="user_facing")` refusal message — distinct from `docs_sync_*` (which stays RoboCo-only by design for the docs-divergence sync engine, see `docs/map/engine-docs-sync.md`); defaults to RoboCo's own value so behavior is unchanged until overridden. |
 | `ROBOCO_DOCS_SITE_PUBLIC_URL` (default `"docs.roboco.tech"`) | `services/docs.py` `_refused_doc_types` | Deployer-configurable public docs URL, same refusal message. |
-| `ROBOCO_ALLOW_FULL_TOOLSET` | flow `_register_tools`, do `_register_tools` | Dev/test escape hatch: when set, a missing manifest registers the full tool set instead of raising `RuntimeError`. Never set in production — the full-toolset path was the original bug this policy replaced. |
 
 No default-off feature flag is armed *inside* this slice; the only flag-gated server here is `roboco-search` (gated upstream by `ROBOCO_RESEARCH_ENABLED` in the orchestrator mount).
 
 ## Gotchas
 
 - **Import-free `__init__.py` is load-bearing.** Re-exporting server factories here would force `optimal_server` (pgvector/ollama stack, ~6s) to load on every `python -m roboco.mcp.<name>` and time out the MCP init — symptom: "roboco-flow/do tools never register".
-- **flow/do refuse to start without the manifest** unless `ROBOCO_ALLOW_FULL_TOOLSET` is set. A missing `/app/tool-manifest.json` raises `RuntimeError` at import (production path). Previously the fallback registered all verbs, letting PMs call dev verbs at wrong URLs (404 storm). Local test runs without the bind mount can either set `ROBOCO_TOOL_MANIFEST_PATH` to a real file or set `ROBOCO_ALLOW_FULL_TOOLSET` to skip the hard-fail; the latter must never reach production containers.
+- **flow/do refuse to start without the manifest.** A missing `/app/tool-manifest.json` raises `RuntimeError` at import (production path). Previously the fallback registered all verbs, letting PMs call dev verbs at wrong URLs (404 storm). Local test runs without the bind mount set `ROBOCO_TOOL_MANIFEST_PATH` to a real file.
 - **`pass`/`fail` are Python keywords.** The IntentSpec layer uses `pass_review`/`fail_review`; the MCP layer exposes the public names `pass`/`fail`. `_INTENT_TO_PUBLIC` bridges the two. Forgetting this bridge silently drops QA tools from the palette (the dogfood bug that motivated it).
 - **Dict-shaped `error` crashes a naive breaker.** `error in frozenset` raises `TypeError: unhashable type: 'dict'` when FastAPI exception handlers return `error` as a dict. `_classify_rejection` uses `isinstance` checks first — never a `dict in frozenset` membership test.
 - **404 handling has three cases (updated 536bbb64).** (1) Bare default FastAPI 404 (`{"detail": "Not Found"}`) → missing route, synthesized as `invalid_state` with a wiring-gap remediate. (2) 404 carrying an `error` field → surfaced as-is (proxy re-status edge case). (3) 404 with a *descriptive* `detail` string → surfaced as `not_found` with a re-fetch remediate (#61). Previously only cases 1 and 2 existed and a descriptive 404 was mis-synthesized as `invalid_state`.
@@ -322,7 +321,7 @@ No other commits in this slice since baseline.
 > Post-snapshot updates (since 2026-06-29):
 >
 > - **`536bbb64` — "Chore/all/logical gaps sweep (#286)"** (merged 2026-06-30). IMPACT on this slice:
->   - **`flow_server.py` + `do_server.py`**: added `_DICT_ERROR_CODE_MAP` (exact code→kind map, replacing pure-substring classification; closes AUTHENTICATION_REQUIRED mis-routing #161); added descriptive-404 carve-out in `_post` (surfaced as `not_found` instead of `invalid_state` for real resource-not-found 404s, #61); the circuit_open substitution now dict-copies the SDK envelope and nests the original rejection as `inner` (#60); `_register_tools` now accepts `ROBOCO_ALLOW_FULL_TOOLSET` as a dev/test escape hatch instead of always raising `RuntimeError` (#162).
+>   - **`flow_server.py` + `do_server.py`**: added `_DICT_ERROR_CODE_MAP` (exact code→kind map, replacing pure-substring classification; closes AUTHENTICATION_REQUIRED mis-routing #161); added descriptive-404 carve-out in `_post` (surfaced as `not_found` instead of `invalid_state` for real resource-not-found 404s, #61); the circuit_open substitution now dict-copies the SDK envelope and nests the original rejection as `inner` (#60).
 >   - **`intake_server.py`**: `propose_batch` now accepts `name` as a fallback for `title` (via new `_draft_title` / `_normalize_batch_drafts` helpers); `name`-only drafts are normalized onto `title` before posting rather than silently dropped (#163).
 >   - **`docs_server.py`**: `_handle_write` now surfaces a `commit_status == "failed"` outcome in the tool return string, telling the documenter to warn the cell PM when the doc could not be committed to the project repo (#34).
 >
@@ -340,7 +339,7 @@ No other commits in this slice since baseline.
 | Breaker substitution could mask a real, fixable rejection | `flow_server.py:394`, `do_server.py:349` | **Partially mitigated (536bbb64):** the circuit_open envelope is now a dict-copy of the SDK's envelope with the original rejection nested as `inner` (preserving its kind/message/remediate). The agent sees `circuit_open` at the top level but the underlying rejection survives for ops debugging. The core risk remains: if the breaker trips on a mis-counted storm, the agent stops instead of retrying. | medium |
 | Dict-error classification substring fallback → mis-routing risk for unknown codes | `flow_server.py:110`, `do_server.py:94` | **Partially mitigated (536bbb64):** `_classify_dict_error_code` now consults `_DICT_ERROR_CODE_MAP` first (exact match for all known RobocoError codes, closing the AUTHENTICATION_REQUIRED mis-routing bug #161). Only codes NOT in the map fall through to the substring branch. A novel code that accidentally contains `DENIED`/`AUTH`/`PERMISSION` but is semantically different would still mis-route. Risk is now confined to future unknown codes only. | low |
 | 404 synthesis assumptions | `flow_server.py:272`, `do_server.py:238` | **Partially mitigated (536bbb64 #61):** a third 404 case was added: a 404 with a *descriptive* `detail` string (not the bare FastAPI default `"Not Found"`) is now surfaced as `not_found`, not `invalid_state`. Residual risk: a future route that returns a bare 404 with no `detail`/`error` field for a real resource-not-found would still synthesize `invalid_state`. The two carve-outs (`error` field → as-is; descriptive `detail` → `not_found`) cover the known cases. | low |
-| `_register_tools` raises at import if manifest missing — local dev breakage | `flow_server.py:965`, `do_server.py:896` | **Mitigated (536bbb64):** `ROBOCO_ALLOW_FULL_TOOLSET` env var added as a dev/test escape hatch that bypasses the `RuntimeError` and registers the full tool set. Production behaviour is unchanged (ROBOCO_ALLOW_FULL_TOOLSET is not set in the orchestrator manifest). The mitigant must not leak into production containers. | low |
+| `_register_tools` raises at import if manifest missing — local dev breakage | `flow_server.py:965`, `do_server.py:896` | **Resolved:** the override was removed; a missing manifest always raises, and tests point `ROBOCO_TOOL_MANIFEST_PATH` at a real file. | low |
 | `propose_batch` well-formed filter could silently drop intended drafts | `intake_server.py:146` | **Partially mitigated (536bbb64 #163):** `_draft_title` now accepts `name` as a fallback for `title`, and `_normalize_batch_drafts` normalizes `name`-only drafts onto `title` before posting. Residual risk: a draft using a different key (e.g. `label`) is still dropped silently; the `dropped` count is sent but the CEO may not notice. | low |
 | Breaker SDK timeout (2s) may be too tight under load | `flow_server.py:55`, `do_server.py:37` | `_SDK_TIMEOUT=2.0` for the loopback `/verb/attempted` POST. Under container CPU contention the SDK could exceed 2s and the breaker fails open (returns original payload) — re-introducing the unbounded-retry condition the breaker was added to stop. Fail-open is safe but defeats the protection. | low |
 | Circuit-breaker forwarding does not pass `task_id` for content tools that lack one | `do_server.py:379` | `body.get("task_id")` is sent to the SDK. Several do-tools (`read_messages`, `notify_list`) have no `task_id` — the breaker records `task_id=None`, so the per-verb (not per-task) breaker still works, but any future per-task breaker logic would mis-attribute these. | low |

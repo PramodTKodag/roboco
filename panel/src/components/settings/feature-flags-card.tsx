@@ -45,8 +45,6 @@ const FLAG_DESCRIPTIONS: Record<string, string> = {
     "Serve decisions from the self-hosted sidecar's Clef backend (27B llama.cpp, roboco-decisions container) when it is healthy: the built-in sweet-spot default tier, no key, no spend. Inert until that container exists and decisions_enabled above is on.",
   decisions_tier_laya_enabled:
     "Serve decisions from the self-hosted sidecar's Laya backend (421M, the cheap option) when the Clef backend is disabled or unhealthy: no key, no spend. Inert until that container exists and decisions_enabled above is on.",
-  decisions_tier_openrouter_enabled:
-    "Opt-in fallback tier: serve decisions through the OpenRouter Decisions API when the sidecar is disabled or unhealthy. Opting in is deliberate spend and requires an OpenRouter key on the AI Providers screen (a warning banner appears there while the key is missing).",
   external_pr_enabled:
     "Discover and review inbound external/fork pull requests.",
   internal_pr_enabled:
@@ -89,8 +87,6 @@ const FLAG_DESCRIPTIONS: Record<string, string> = {
     "Provision a throwaway Postgres/Redis sibling container per agent spawn (per-project opt-in) instead of injecting RoboCo's own production DB credentials into the agent's gate.",
   token_factory_sandboxes_enabled:
     "Lets developers and QA run a task's test suite inside a Token Factory Sandbox microVM on Nebius (millisecond boot, destroyed after the run) instead of the agent's own container. Needs a Nebius API key; when off, agents keep their local shells.",
-  routing_strict:
-    "Fail-closed model routing: refuse to silently downgrade an agent to the legacy Anthropic path when its configured provider is disabled (raise instead). Off => graceful degradation with a warning.",
   x_engine_enabled:
     "Draft release-announcement posts for the X (Twitter) account — every draft is held in a queue for you to edit, approve, or reject; nothing posts automatically, and it stays inert until you set credentials in the X card below.",
   x_replies_enabled:
@@ -131,8 +127,6 @@ const FLAG_TOOLTIPS: Record<string, string> = {
     "Default self-hosted Clef tier (no key, no spend).",
   decisions_tier_laya_enabled:
     "Cheap self-hosted Laya fallback when Clef is down.",
-  decisions_tier_openrouter_enabled:
-    "Falls back to the paid OpenRouter Decisions API when the sidecar is down.",
   external_pr_enabled:
     "Reviews inbound external/fork pull requests before merge.",
   internal_pr_enabled: "Safety-reviews internal PRs before merge.",
@@ -172,8 +166,6 @@ const FLAG_TOOLTIPS: Record<string, string> = {
     "Gives agents on-demand disposable DB/Redis sandboxes for testing.",
   token_factory_sandboxes_enabled:
     "Runs QA test suites in Nebius Token Factory Sandbox microVMs.",
-  routing_strict:
-    "Fails closed instead of silently falling back on a disabled provider.",
   x_engine_enabled: "Drafts X posts for CEO review; nothing auto-posts.",
   x_replies_enabled: "Drafts replies to X mentions (needs a paid X API tier).",
   x_feature_spotlight_enabled:

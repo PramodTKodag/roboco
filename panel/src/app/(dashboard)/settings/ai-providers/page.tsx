@@ -1,5 +1,4 @@
 import { AIRoutingCard } from "@/components/settings/ai-routing-card";
-import { DecisionsStatusBanner } from "@/components/settings/decisions-status-banner";
 
 export default function AIProvidersPage() {
   return (
@@ -10,10 +9,6 @@ export default function AIProvidersPage() {
           Pick how roboco agents authenticate and which model each one runs on.
         </p>
       </div>
-
-      {/* Warns when the Decisions OpenRouter fallback tier is opted in without
-          a stored OpenRouter key; renders nothing otherwise. */}
-      <DecisionsStatusBanner />
 
       <AIRoutingCard />
     </div>

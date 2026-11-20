@@ -1,21 +1,13 @@
 """roboco-intake MCP server — the Intake interviewer's ``propose_draft`` and
 ``propose_batch`` (MegaTask) tools.
 
-The grok-CLI interactive intake agent calls ``propose_draft`` (one task) or
-``propose_batch`` (a sequenced MegaTask of several tasks) once the spec is ready;
-this delivers it to the panel's reviewable card by POSTing it straight to the
-prompter-live relay (the same ``/api/prompter/live/{session}/events`` endpoint the
-driver's relay sink uses).
+The intake chat agent calls ``propose_draft`` (one task) or ``propose_batch``
+(a sequenced MegaTask of several tasks) once the spec is ready; this delivers
+it to the panel's reviewable card by POSTing it straight to the prompter-live
+relay (the ``/api/prompter/live/{session}/events`` endpoint).
 
-WHY IT POSTS DIRECTLY: grok's ``streaming-json`` output does not surface
-tool-call events (verified live — a tool runs but never appears in the stream),
-so :class:`~roboco.agent_sdk.grok_cli_session.GrokCliSession` cannot intercept
-this call to emit a ``draft`` chunk. The tool POSTs the draft itself. (The Claude
-intake path differs: the Claude SDK exposes the tool-use block, so its driver
-intercepts it.)
-
-Wired into ``~/.grok/config.toml`` by ``grok_intake_main``; the container
-provides ``ROBOCO_API_URL`` + ``ROBOCO_PROMPTER_SESSION_ID``.
+Mounted for an intake chat turn by the model-run supervisor through the
+worker-tools bridge, which supplies the session id and run-scoped credentials.
 """
 
 from __future__ import annotations
@@ -116,10 +108,8 @@ async def query_past_tasks(
 ) -> dict[str, Any]:
     """GET the bounded compact task-search results; never raises.
 
-    Module-level so it is unit-testable AND shared with the Claude SDK
-    driver's in-process tool (``intake_driver.py`` imports this directly) —
-    the HTTP + bounding logic for ``search_past_tasks`` lives in exactly one
-    place, used by both runtimes.
+    Module-level so it is unit-testable; the HTTP + bounding logic for
+    ``search_past_tasks`` lives here.
     """
     q = (query or "").strip()[:_SEARCH_QUERY_MAX_LEN]
     if len(q) < _SEARCH_QUERY_MIN_LEN:

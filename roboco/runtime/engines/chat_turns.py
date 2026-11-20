@@ -300,4 +300,3 @@ class ChatTurnRunner:
         self._registry.push(
             session_id, {"kind": kind, "text": text, "tool": "", "data": {}}
         )
-

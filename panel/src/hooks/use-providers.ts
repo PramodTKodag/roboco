@@ -12,12 +12,7 @@ export const providerKeys = {
   catalog: () => [...providerKeys.all, "catalog"] as const,
   ollamaKey: () => [...providerKeys.all, "ollama-key"] as const,
   grokKey: () => [...providerKeys.all, "grok-key"] as const,
-  openRouterKey: () => [...providerKeys.all, "openrouter-key"] as const,
-  decisionsStatus: () => [...providerKeys.all, "decisions-status"] as const,
   zaiKey: () => [...providerKeys.all, "zai-key"] as const,
-  humminKey: () => [...providerKeys.all, "hummin-key"] as const,
-  openRouterModels: (query: string) =>
-    [...providerKeys.all, "openrouter-models", query] as const,
   nebiusKey: () => [...providerKeys.all, "nebius-key"] as const,
   nebiusModels: (query: string) =>
     [...providerKeys.all, "nebius-models", query] as const,
@@ -77,34 +72,6 @@ export function useSetGrokKey() {
   });
 }
 
-export function useOpenRouterKey() {
-  return useQuery({
-    queryKey: providerKeys.openRouterKey(),
-    queryFn: () => providersApi.getOpenRouterKey(),
-    staleTime: 60_000,
-  });
-}
-
-export function useDecisionsStatus() {
-  return useQuery({
-    queryKey: providerKeys.decisionsStatus(),
-    queryFn: () => providersApi.getDecisionsStatus(),
-    staleTime: 60_000,
-  });
-}
-
-export function useSetOpenRouterKey() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (apiKey: string) => providersApi.setOpenRouterKey(apiKey),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: providerKeys.openRouterKey() });
-      // Applying a mode also reads this so refresh it too.
-      qc.invalidateQueries({ queryKey: providerKeys.mode() });
-    },
-  });
-}
-
 export function useNebiusKey() {
   return useQuery({
     queryKey: providerKeys.nebiusKey(),
@@ -117,14 +84,6 @@ export function useZaiKey() {
   return useQuery({
     queryKey: providerKeys.zaiKey(),
     queryFn: () => providersApi.getZaiKey(),
-    staleTime: 60_000,
-  });
-}
-
-export function useHumminKey() {
-  return useQuery({
-    queryKey: providerKeys.humminKey(),
-    queryFn: () => providersApi.getHumminKey(),
     staleTime: 60_000,
   });
 }
@@ -150,30 +109,6 @@ export function useSetZaiKey() {
       // Applying a mode also reads this so refresh it too.
       qc.invalidateQueries({ queryKey: providerKeys.mode() });
     },
-  });
-}
-
-export function useSetHumminKey() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (apiKey: string) => providersApi.setHumminKey(apiKey),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: providerKeys.humminKey() });
-      // Applying a mode also reads this so refresh it too.
-      qc.invalidateQueries({ queryKey: providerKeys.mode() });
-    },
-  });
-}
-
-/** Query: search OpenRouter's catalog. Debouncing the input lives in the
- * component; `enabled` (key set + non-empty query) keeps the query idle so
- * nothing preloads while the picker is untouched. */
-export function useSearchOpenRouterModels(query: string, enabled: boolean) {
-  return useQuery({
-    queryKey: providerKeys.openRouterModels(query),
-    queryFn: () => providersApi.searchOpenRouterModels(query),
-    enabled: enabled && query.length > 0,
-    staleTime: 60_000,
   });
 }
 

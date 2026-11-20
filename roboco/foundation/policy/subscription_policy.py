@@ -71,10 +71,7 @@ FORBIDDEN_ENV_NAMES: frozenset[str] = frozenset(
 
 # Features that route model or code traffic to a second provider. They can be
 # neither configured on nor persisted on.
-FORBIDDEN_FEATURE_FLAGS: tuple[str, ...] = (
-    "decisions_tier_openrouter_enabled",
-    "token_factory_sandboxes_enabled",
-)
+FORBIDDEN_FEATURE_FLAGS: tuple[str, ...] = ("token_factory_sandboxes_enabled",)
 
 
 def forbidden_env_names(environ: Mapping[str, str]) -> list[str]:

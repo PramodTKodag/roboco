@@ -22,7 +22,6 @@ from roboco.mcp.utils import ApiClient
 
 
 async def _tool_names(role: str, monkeypatch: pytest.MonkeyPatch) -> set[str]:
-    monkeypatch.delenv("ROBOCO_ALLOW_FULL_TOOLSET", raising=False)
     if role:
         monkeypatch.setenv("ROBOCO_AGENT_ROLE", role)
     else:
@@ -146,16 +145,6 @@ def test_append_live_write_caveat_survives_content_cap() -> None:
     assert out[0]["content"].endswith(_LIVE_WRITE_CAVEAT)
 
 
-@pytest.mark.asyncio
-async def test_full_toolset_escape_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ROBOCO_AGENT_ROLE", "developer")
-    monkeypatch.setenv("ROBOCO_ALLOW_FULL_TOOLSET", "1")
-    server = create_optimal_mcp_server("00000000-0000-0000-0000-000000000042")
-    names = {t.name for t in await server.list_tools()}
-    assert "roboco_reindex_all" in names
-    assert "roboco_record_decision" in names
-
-
 # ---------------------------------------------------------------------------
 # Caveat reach: roboco_ask_mentor's `sources` and roboco_rag_query's
 # `citations` are the same SearchResultResponse shape roboco_kb_search's
@@ -195,7 +184,6 @@ async def _call_tool(
 ) -> dict[str, Any]:
     """Register the role's tools, call one by name with ApiClient.post
     stubbed to return ``api_payload``, and return the structured result."""
-    monkeypatch.delenv("ROBOCO_ALLOW_FULL_TOOLSET", raising=False)
     monkeypatch.setenv("ROBOCO_AGENT_ROLE", role)
     server = create_optimal_mcp_server("00000000-0000-0000-0000-000000000042")
     with patch.object(

@@ -9,9 +9,9 @@ each started by docker/decisions/entrypoint.sh in this container:
   - laya (cheap option): ggml-org/Laya-GGUF, a 421M ModernBERT decision
     model (Apache-2.0), llama-server on 127.0.0.1:8111.
 
-Serves the OpenRouter Decisions wire shape (POST /api/alpha/decisions) so
+Serves the Decisions wire shape (POST /api/alpha/decisions) so
 roboco/services/decisions/client.py speaks ONE implementation against the
-self-hosted tiers and the OpenRouter fallback tier
+self-hosted tiers
 (docs/internal/decisions-spec.md sections 8 Stage 0.5 and 10). The proxy
 forwards {state, questions} to the routed upstream's /v1/systemone
 verbatim and maps the answer into the exact envelope this sidecar has
@@ -355,7 +355,7 @@ def build_answers(questions: dict[str, dict[str, Any]], raw_answers: Any) -> dic
     parser treats a missing answer as "no verdict", and the
     fail-closed consumers flag on exactly that. This function is the
     single seam the contract test exercises (the orchestrator parses
-    its output under the same schemas.py as OpenRouter's)."""
+    its output under the same schemas.py)."""
     if not isinstance(raw_answers, dict):
         raw_answers = {}
     answers: dict[str, dict[str, Any]] = {}

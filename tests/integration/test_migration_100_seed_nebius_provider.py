@@ -1,8 +1,7 @@
 """Migration 099/100 tests: modelprovider_nebius + seed_nebius_provider.
 
 Verifies the post-upgrade state and exercises the downgrade SQL ordering,
-mirroring ``test_migration_096_seed_openrouter_provider.py``'s own shape with
-the same posture: Nebius's row is seeded ``enabled=false`` (the GROK
+with this posture: Nebius's row is seeded ``enabled=false`` (the GROK
 posture, not Kimi's). Unlike the subscription-CLI providers there IS a
 key-collection step gating the row: the Fernet-encrypted Nebius API key
 set via PUT /providers/nebius-key, which encrypts + enables in the same

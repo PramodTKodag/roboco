@@ -1,11 +1,8 @@
-"""#20/#3: ModelRoutingService silent-downgrade on a disabled configured provider.
+"""ModelRoutingService never moves an agent to another provider on its own.
 
-A configured-but-disabled provider was indistinguishable from "no assignment":
-``resolve_for_agent`` fell straight to the legacy Anthropic path with no signal,
-so an operator who disabled a provider got no warning that spawns were bypassing
-it. The fix surfaces the bypass with a warning (graceful degradation, but not
-silent) and adds an opt-in ``ROBOCO_ROUTING_STRICT`` fail-closed for operators
-who'd rather a misconfigured provider stall a spawn than run on the wrong one.
+An agent with no assignment uses the default Anthropic route. An agent whose
+configured provider is disabled, unreachable or unreadable raises
+``ProviderRoutingError`` instead of silently running on a different provider.
 """
 
 from __future__ import annotations
@@ -14,7 +11,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from roboco.models.base import AssignmentScope, ModelProvider
-from roboco.services.llm import ModelRoutingService, _ResolvedAssignment
+from roboco.utils.crypto import EncryptionError
+from roboco.services.llm import (
+    ModelRoutingService,
+    ProviderRoutingError,
+    _ResolvedAssignment,
+)
 
 _AGENT_SLUG = "be-dev-1"
 
@@ -36,46 +38,83 @@ def _svc() -> ModelRoutingService:
 
 
 @pytest.mark.asyncio
-async def test_resolve_for_agent_warns_on_disabled_configured_provider() -> None:
-    """The disabled-provider bypass is surfaced (warning), not silent."""
-    svc = _svc()
-    with patch.object(
-        svc, "_resolve_assignment", AsyncMock(return_value=_disabled_resolved())
-    ):
-        route = await svc.resolve_for_agent(_AGENT_SLUG)
-
-    # Graceful degradation: falls through to the legacy Anthropic path.
-    assert route.provider_type == ModelProvider.ANTHROPIC
-    # The bypass is logged as a warning (not silent).
-    svc.log.warning.assert_called_once()
-    assert "disabled" in svc.log.warning.call_args.args[0].lower()
-
-
-@pytest.mark.asyncio
-async def test_resolve_for_agent_strict_raises_on_disabled_provider() -> None:
-    """ROBOCO_ROUTING_STRICT refuses to silently downgrade — a disabled
-    configured provider raises instead of running on the legacy path."""
+async def test_disabled_configured_provider_is_refused_not_downgraded() -> None:
     svc = _svc()
     with (
         patch.object(
             svc, "_resolve_assignment", AsyncMock(return_value=_disabled_resolved())
         ),
-        patch("roboco.services.llm.settings", MagicMock(routing_strict=True)),
-        pytest.raises(RuntimeError, match="routing_strict"),
+        pytest.raises(ProviderRoutingError, match="disabled"),
+    ):
+        await svc.resolve_for_agent(_AGENT_SLUG)
+
+    svc.log.error.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_unreachable_self_hosted_server_is_refused_not_downgraded() -> None:
+    provider = MagicMock(
+        enabled=True,
+        id="prov-local",
+        type=ModelProvider.LOCAL,
+        base_url="http://ollama.invalid:11434",
+    )
+    resolved = _ResolvedAssignment(
+        provider=provider, model_name="llama", scope=AssignmentScope.GLOBAL
+    )
+    svc = _svc()
+    with (
+        patch.object(svc, "_resolve_assignment", AsyncMock(return_value=resolved)),
+        patch(
+            "roboco.services.llm.probe_ollama_tags",
+            AsyncMock(return_value=(None, "connection refused")),
+        ),
+        pytest.raises(ProviderRoutingError, match="unreachable"),
     ):
         await svc.resolve_for_agent(_AGENT_SLUG)
 
 
 @pytest.mark.asyncio
-async def test_resolve_for_agent_no_assignment_is_silent_legacy_fallback() -> None:
-    """A genuinely unassigned agent (no row at all) is the designed legacy
-    fallback — that path must stay silent (no spurious 'disabled' warning),
-    so the warning is specific to a configured-but-disabled provider."""
+async def test_self_hosted_provider_without_base_url_is_refused() -> None:
+    provider = MagicMock(
+        enabled=True, id="prov-local", type=ModelProvider.LOCAL, base_url=None
+    )
+    resolved = _ResolvedAssignment(
+        provider=provider, model_name="llama", scope=AssignmentScope.GLOBAL
+    )
+    svc = _svc()
+    with (
+        patch.object(svc, "_resolve_assignment", AsyncMock(return_value=resolved)),
+        pytest.raises(ProviderRoutingError, match="no base_url"),
+    ):
+        await svc.resolve_for_agent(_AGENT_SLUG)
+
+
+@pytest.mark.asyncio
+async def test_undecryptable_provider_token_is_refused_not_downgraded() -> None:
+    provider = MagicMock(enabled=True, id="prov-grok", type=ModelProvider.GROK)
+    resolved = _ResolvedAssignment(
+        provider=provider, model_name="grok-build", scope=AssignmentScope.GLOBAL
+    )
+    svc = _svc()
+    with (
+        patch.object(svc, "_resolve_assignment", AsyncMock(return_value=resolved)),
+        patch.object(
+            svc, "_route_from_assignment", AsyncMock(side_effect=EncryptionError("x"))
+        ),
+        pytest.raises(ProviderRoutingError, match="cannot be decrypted"),
+    ):
+        await svc.resolve_for_agent(_AGENT_SLUG)
+
+
+@pytest.mark.asyncio
+async def test_no_assignment_uses_the_default_anthropic_route() -> None:
     svc = _svc()
     with patch.object(svc, "_resolve_assignment", AsyncMock(return_value=None)):
         route = await svc.resolve_for_agent(_AGENT_SLUG)
 
     assert route.provider_type == ModelProvider.ANTHROPIC
+    svc.log.error.assert_not_called()
     svc.log.warning.assert_not_called()
 
 

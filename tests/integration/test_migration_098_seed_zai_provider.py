@@ -1,12 +1,10 @@
 """Migration 097/098 tests: modelprovider_zai + seed_zai_provider.
 
-Verifies the post-upgrade state, mirroring
-``test_migration_096_seed_openrouter_provider.py``'s own shape. The Z.ai
+Verifies the post-upgrade state. The Z.ai
 row is seeded ``enabled=false`` (the GROK/OLLAMA_CLOUD posture: a
 key-collection step gates the row — PUT /providers/zai-key encrypts +
-enables in the same transaction) with ONE decisive contrast to
-OpenRouter: ``base_url`` is NOT NULL. Z.ai routes via ANTHROPIC_BASE_URL
-injection at spawn (the OLLAMA_CLOUD shape), so the row carries Z.ai's
+enables in the same transaction) and ``base_url`` is NOT NULL. Z.ai routes
+via ANTHROPIC_BASE_URL injection at spawn (the OLLAMA_CLOUD shape), so the row carries Z.ai's
 Anthropic-compatible endpoint from birth.
 
 NOT a real alembic round-trip: the suite builds the test DB via
@@ -74,7 +72,7 @@ async def test_migration_098_upgrade_insert_contract(
     # The load-bearing assertion: enabled=False at seed time (the
     # OLLAMA_CLOUD posture: there is a key-collection step gating this row).
     assert enabled is False
-    # The decisive contrast to OpenRouter: the injection endpoint ships
+    # The injection endpoint ships
     # with the row, because ANTHROPIC_BASE_URL injection is the whole
     # routing mechanism for this provider.
     assert base_url == "https://api.z.ai/api/anthropic"

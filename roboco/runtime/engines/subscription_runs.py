@@ -109,9 +109,7 @@ def tool_manifest_for_role(role: RoleConfig, *, has_workspace: bool) -> ToolMani
     """
     operations: tuple[WorkerOperation, ...] = ()
     if has_workspace:
-        operations = _READ_OPERATIONS + (
-            _WRITE_OPERATIONS if role.allows_write else ()
-        )
+        operations = _READ_OPERATIONS + (_WRITE_OPERATIONS if role.allows_write else ())
     grants = tuple(
         VerbGrant(server=server, verbs=verbs)
         for server, verbs in (

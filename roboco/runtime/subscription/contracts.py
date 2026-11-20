@@ -222,9 +222,9 @@ class RunRequest(_Frozen):
     manifest: ToolManifest | None = None
     verb_credentials: VerbCredentials | None = None
     # The live chat the intake tools post drafts to; set only with an intake grant.
-    session_id: Annotated[str, StringConstraints(pattern=_SESSION_ID_PATTERN)] | None = (
-        None
-    )
+    session_id: (
+        Annotated[str, StringConstraints(pattern=_SESSION_ID_PATTERN)] | None
+    ) = None
 
     @model_validator(mode="after")
     def _verbs_match_purpose_and_credentials(self) -> Self:

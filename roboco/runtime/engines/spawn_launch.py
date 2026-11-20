@@ -26,12 +26,16 @@ from roboco.foundation.identity import (
 )
 from roboco.models.base import ModelProvider
 from roboco.models.runtime import (
-    ROLE_MODEL_MAP,
     AgentInstance,
     OrchestratorAgentConfig,
     SpawnGitContext,
 )
-from roboco.runtime.compose_labels import compose_label_args
+from roboco.runtime.engines.subscription_dispatch import (
+    SubscriptionNotConfigured,
+    build_run_launch,
+    build_run_supervisor,
+    resolve_project_binding,
+)
 from roboco.runtime.orchestrator import (
     _AUTO_BLOCK_SKIP_STATUSES,
     AGENT_BASE_IMAGE,
@@ -55,15 +59,8 @@ from roboco.runtime.orchestrator import (
     _resolve_agent_cli_model,
     _resolve_project_slug_from_git_context,
     _system_api_headers,
-    get_agent_image,
     is_unattributed_delivery_spawn,
     logger,
-)
-from roboco.runtime.engines.subscription_dispatch import (
-    SubscriptionNotConfigured,
-    build_run_launch,
-    build_run_supervisor,
-    resolve_project_binding,
 )
 from roboco.seeds.initial_data import AGENT_UUIDS
 
@@ -142,17 +139,7 @@ class SpawnLaunchEngine(_Base):
                     "roboco-agent-doc": "agent-doc.Dockerfile",
                     "roboco-agent-ux": "agent-ux.Dockerfile",
                     "roboco-agent-devops": "agent-devops.Dockerfile",
-                    "roboco-agent-prompter": "agent-prompter.Dockerfile",
-                    "roboco-agent-secretary": "agent-secretary.Dockerfile",
                     "roboco-agent-pr-reviewer": "agent-pr-reviewer.Dockerfile",
-                    # Provider-generic live-chat images (interactive
-                    # intake/secretary on every routed provider).
-                    "roboco-agent-hummin-live": "agent-hummin-live.Dockerfile",
-                    "roboco-agent-codex-live": "agent-codex-live.Dockerfile",
-                    "roboco-agent-gemini-live": "agent-gemini-live.Dockerfile",
-                    "roboco-agent-kimi-live": "agent-kimi-live.Dockerfile",
-                    "roboco-agent-openrouter-live": "agent-openrouter-live.Dockerfile",
-                    "roboco-agent-nebius-live": "agent-nebius-live.Dockerfile",
                 }
                 dockerfile = dockerfile_map.get(bare)
                 if dockerfile:
@@ -386,9 +373,8 @@ class SpawnLaunchEngine(_Base):
         # Resolve the provider route for this agent. Caller-supplied `model`
         # wins (dispatcher overrides, tests). Otherwise the routing service
         # resolves (agent_slug | role+complexity | role | global) assignments,
-        # falling back internally to `ROLE_MODEL_MAP` when no rows exist — so
-        # a fresh deployment with an empty `model_assignments` table behaves
-        # exactly as before.
+        # using `ROLE_MODEL_MAP` when no rows exist, and refusing a configured
+        # provider that cannot be used.
         route = await self._resolve_agent_route(agent_id, task_id)
         if not model:
             model = route.model_name
@@ -843,14 +829,8 @@ class SpawnLaunchEngine(_Base):
                 "gemini_usage": f"{DATA_HOST_PATH}/gemini-usage/{config.agent_id}",
                 # Per-agent kimi usage dir (KIMI only); same shape.
                 "kimi_usage": f"{DATA_HOST_PATH}/kimi-usage/{config.agent_id}",
-                # Per-agent openrouter usage dir (OPENROUTER only); same shape.
-                "openrouter_usage": (
-                    f"{DATA_HOST_PATH}/openrouter-usage/{config.agent_id}"
-                ),
                 # Per-agent nebius usage dir (NEBIUS only); same shape.
                 "nebius_usage": f"{DATA_HOST_PATH}/nebius-usage/{config.agent_id}",
-                # Per-agent hummin usage dir (HUMMIN only); same shape.
-                "hummin_usage": f"{DATA_HOST_PATH}/hummin-usage/{config.agent_id}",
                 "prompt": (
                     f"{DATA_HOST_PATH}/prompts-generated/{config.agent_id}-prompt.md"
                 ),
@@ -881,16 +861,8 @@ class SpawnLaunchEngine(_Base):
             "kimi_usage": str(
                 Path(tempfile.gettempdir()) / "roboco-kimi-usage" / config.agent_id
             ),
-            "openrouter_usage": str(
-                Path(tempfile.gettempdir())
-                / "roboco-openrouter-usage"
-                / config.agent_id
-            ),
             "nebius_usage": str(
                 Path(tempfile.gettempdir()) / "roboco-nebius-usage" / config.agent_id
-            ),
-            "hummin_usage": str(
-                Path(tempfile.gettempdir()) / "roboco-hummin-usage" / config.agent_id
             ),
             "prompt": str(
                 Path(tempfile.gettempdir())
@@ -1132,26 +1104,18 @@ class SpawnLaunchEngine(_Base):
         official CLI, one-shot delivery roles only — see
         roboco.llm.providers.gemini for the V1 scope), and KIMI (Moonshot,
         official CLI, one-shot delivery roles only — see
-        roboco.llm.providers.kimi for the V1 scope), OPENROUTER (any
-        OpenRouter model via the opencode CLI, the Ollama shape — static key
-        via env, no auth mount; one-shot delivery roles only — see
-        roboco.llm.providers.openrouter for the V1 scope), NEBIUS
+        roboco.llm.providers.kimi for the V1 scope), and NEBIUS
         (Nebius Token Factory open models - NVIDIA Nemotron et al. - via the
-        opencode CLI, the same Ollama shape; one-shot delivery roles only -
-        see roboco.llm.providers.nebius for the V1 scope), and HUMMIN (the
-        GLM family via the GLM-native hummin CLI, key-injected as ZAI_API_KEY
-        - the OpenRouter auth shape on the kimi spawn flow; one-shot delivery
-        roles only - see roboco.llm.providers.hummin for the V1 scope).
+        opencode CLI, static key via env; one-shot delivery roles only -
+        see roboco.llm.providers.nebius for the V1 scope).
         """
         if self._provider_registry is None:
             from roboco.llm.providers import (
                 CodexCliProvider,
                 GeminiCliProvider,
                 GrokCliProvider,
-                HumminCliProvider,
                 KimiCliProvider,
                 NebiusProvider,
-                OpenRouterProvider,
                 ProviderRegistry,
             )
             from roboco.models.base import ModelProvider
@@ -1181,20 +1145,8 @@ class SpawnLaunchEngine(_Base):
                 KimiCliProvider(self, image=_qualify_agent_image("roboco-agent-kimi")),
             )
             registry.register(
-                ModelProvider.OPENROUTER,
-                OpenRouterProvider(
-                    self, image=_qualify_agent_image("roboco-agent-openrouter")
-                ),
-            )
-            registry.register(
                 ModelProvider.NEBIUS,
                 NebiusProvider(self, image=_qualify_agent_image("roboco-agent-nebius")),
-            )
-            registry.register(
-                ModelProvider.HUMMIN,
-                HumminCliProvider(
-                    self, image=_qualify_agent_image("roboco-agent-hummin")
-                ),
             )
             self._provider_registry = registry
         return self._provider_registry
@@ -1531,63 +1483,42 @@ class SpawnLaunchEngine(_Base):
         `ROLE(":"complexity)` override (see `ModelRoutingService`) can apply.
         The task lookup is isolated in its own try/except: a missing task or
         lookup failure degrades to the plain-role path silently (debug log —
-        this is the common case for non-task spawns like idle PM bootstrap),
-        never escalating to the full legacy-Anthropic downgrade below.
+        this is the common case for non-task spawns like idle PM bootstrap).
 
-        Errors are contained: any DB/session failure degrades to a legacy
-        Anthropic-default AgentRoute so spawn never stalls on routing.
+        A routing failure (disabled or unreachable provider, DB error) is not
+        contained: the exception reaches the spawn caller, so an agent is never
+        moved to a different provider automatically.
         """
         from sqlalchemy import select
 
         from roboco.db.base import get_session_factory
         from roboco.db.tables import TaskTable
-        from roboco.models.base import ModelProvider
-        from roboco.models.runtime import MODEL_MAP
-        from roboco.services.llm import (
-            AgentRoute,
-            get_model_routing_service,
-        )
+        from roboco.services.llm import get_model_routing_service
 
-        try:
-            factory = get_session_factory()
-            async with factory() as db:
-                complexity: str | None = None
-                if task_id:
-                    try:
-                        result = await db.execute(
-                            select(TaskTable).where(TaskTable.id == task_id)
+        factory = get_session_factory()
+        async with factory() as db:
+            complexity: str | None = None
+            if task_id:
+                try:
+                    result = await db.execute(
+                        select(TaskTable).where(TaskTable.id == task_id)
+                    )
+                    task = result.scalar_one_or_none()
+                    if task is not None:
+                        if task.estimated_complexity is not None:
+                            complexity = task.estimated_complexity.value.lower()
+                        complexity = await self._decisions_complexity_override(
+                            db, task, static=complexity
                         )
-                        task = result.scalar_one_or_none()
-                        if task is not None:
-                            if task.estimated_complexity is not None:
-                                complexity = task.estimated_complexity.value.lower()
-                            complexity = await self._decisions_complexity_override(
-                                db, task, static=complexity
-                            )
-                    except Exception as e:
-                        logger.debug(
-                            "Task complexity lookup failed; using plain-role routing",
-                            agent_id=agent_id,
-                            task_id=task_id,
-                            error=str(e),
-                        )
-                router = get_model_routing_service(db)
-                return await router.resolve_for_agent(agent_id, complexity=complexity)
-        except Exception as e:  # pragma: no cover
-            role = get_agent_role(agent_id) or ""
-            short = ROLE_MODEL_MAP.get(role, "sonnet")
-            logger.warning(
-                "Model routing resolve failed; using legacy Anthropic path",
-                agent_id=agent_id,
-                error=str(e),
-            )
-            return AgentRoute(
-                provider_id=None,
-                provider_type=ModelProvider.ANTHROPIC,
-                base_url=None,
-                auth_token=None,
-                model_name=MODEL_MAP.get(short, short),
-            )
+                except Exception as e:
+                    logger.debug(
+                        "Task complexity lookup failed; using plain-role routing",
+                        agent_id=agent_id,
+                        task_id=task_id,
+                        error=str(e),
+                    )
+            router = get_model_routing_service(db)
+            return await router.resolve_for_agent(agent_id, complexity=complexity)
 
     async def _decisions_complexity_override(
         self, db: Any, task: Any, *, static: str | None
@@ -1726,14 +1657,10 @@ class SpawnLaunchEngine(_Base):
         KIMI is capped by default: every Kimi container shares one OAuth
         refresh-token chain (see ``settings.kimi_max_concurrent``) — a second
         concurrent container risks forking it and revoking fleet-wide Kimi
-        auth. HUMMIN defaults to uncapped (a static per-spawn env key — no
-        shared chain to protect); its Settings knob exists only for an
-        operator who observes Z.ai throttling the account.
+        auth.
         """
         if provider_type == ModelProvider.KIMI.value:
             return settings.kimi_max_concurrent
-        if provider_type == ModelProvider.HUMMIN.value:
-            return settings.hummin_max_concurrent
         return None
 
     def _live_provider_instance_count(

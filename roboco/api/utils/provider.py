@@ -35,16 +35,10 @@ _PROVIDER_REMEDIATION: dict[ModelProvider, str] = {
         "button, or assign a Kimi model to an agent in Mix mode (both "
         "force-enable the row)."
     ),
-    ModelProvider.OPENROUTER: (
-        "Save the OpenRouter API key first (PUT /providers/openrouter-key)."
-    ),
     ModelProvider.NEBIUS: (
         "Save the Nebius API key first (PUT /providers/nebius-key)."
     ),
     ModelProvider.ZAI: ("Save the Z.ai API key first (PUT /providers/zai-key)."),
-    ModelProvider.HUMMIN: (
-        "Save the Z.ai key for the GLM Coding Plan first (PUT /providers/hummin-key)."
-    ),
 }
 
 
@@ -75,7 +69,7 @@ def parse_complexity_override(
 
 
 def safe_float(value: str | None) -> float | None:
-    """Convert OpenRouter's string pricing rates to float, or None."""
+    """Convert a provider's string pricing rates to float, or None."""
     if value is None:
         return None
     try:

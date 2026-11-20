@@ -157,7 +157,10 @@ async def test_inspect_container_state_times_out_raises_and_kills(
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _exec_returning(proc))
     with pytest.raises(TimeoutError):
         await asyncio.wait_for(
-            AgentOrchestrator._inspect_container_state("roboco-agent-x"), timeout=2.0
+            AgentOrchestrator.__new__(AgentOrchestrator)._inspect_container_state(
+                "roboco-agent-x"
+            ),
+            timeout=2.0,
         )
     assert proc.killed
 
@@ -211,7 +214,10 @@ async def test_inspect_container_state_green_path_parses(
     proc = _DoneInspectProc(b"true 0\n")
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _exec_returning(proc))
     is_running, exit_code = await asyncio.wait_for(
-        AgentOrchestrator._inspect_container_state("roboco-agent-x"), timeout=2.0
+        AgentOrchestrator.__new__(AgentOrchestrator)._inspect_container_state(
+            "roboco-agent-x"
+        ),
+        timeout=2.0,
     )
     assert is_running is True
     assert exit_code == 0

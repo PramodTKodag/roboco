@@ -187,9 +187,7 @@ async def test_the_secretary_chat_tools_are_in_scope(method: str, path: str) -> 
         ("GET", "/api/secretary/directives/"),
     ],
 )
-async def test_other_secretary_routes_stay_out_of_scope(
-    method: str, path: str
-) -> None:
+async def test_other_secretary_routes_stay_out_of_scope(method: str, path: str) -> None:
     gate, downstream = _gate()
     status, _ = await _call(gate, path, _headers(_token()), method)
     assert status == HTTPStatus.FORBIDDEN
@@ -229,7 +227,9 @@ async def test_a_finished_run_loses_access() -> None:
     gate = RunScopeMiddleware(downstream, active_runs=runs)
     assert (await _call(gate, FLOW_PATH, _headers(_token())))[0] == HTTPStatus.OK
     runs.deactivate(RUN)
-    assert (await _call(gate, FLOW_PATH, _headers(_token())))[0] == HTTPStatus.UNAUTHORIZED
+    assert (await _call(gate, FLOW_PATH, _headers(_token())))[
+        0
+    ] == HTTPStatus.UNAUTHORIZED
 
 
 async def test_ordinary_requests_pass_through_untouched() -> None:

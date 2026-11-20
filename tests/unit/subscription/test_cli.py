@@ -334,7 +334,9 @@ def test_an_intake_grant_needs_a_session_id_and_nothing_else_may_have_one() -> N
         RunRequest(spec=_spec(), session_id="3f2a9c10aabbccdd")
 
 
-@pytest.mark.parametrize("session_id", ["short", "a/b/c/d/e/f/g", "x" * 65, "sp ace12345"])
+@pytest.mark.parametrize(
+    "session_id", ["short", "a/b/c/d/e/f/g", "x" * 65, "sp ace12345"]
+)
 def test_chat_session_ids_are_validated(session_id: str) -> None:
     with pytest.raises(ValidationError):
         RunRequest(

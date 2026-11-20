@@ -48,13 +48,11 @@ async def test_persisted_forbidden_flag_row_is_never_applied(
 ) -> None:
     stored = _StoredFlags(
         {
-            "decisions_tier_openrouter_enabled": "true",
             "token_factory_sandboxes_enabled": "true",
             "research_enabled": "false",
         }
     )
     monkeypatch.setattr(settings_service, "get_settings_service", lambda _s: stored)
-    monkeypatch.setattr(settings, "decisions_tier_openrouter_enabled", False)
     monkeypatch.setattr(settings, "token_factory_sandboxes_enabled", False)
     # apply_persisted_feature_flags writes the global settings object; register
     # the benign flag with monkeypatch so it is restored after the test.
@@ -64,8 +62,5 @@ async def test_persisted_forbidden_flag_row_is_never_applied(
     applied = await settings_service.apply_persisted_feature_flags(session)
     effective = await settings_service.feature_flag_effective_values(session)
 
-    assert "decisions_tier_openrouter_enabled" not in applied
-    assert settings.decisions_tier_openrouter_enabled is False
     assert settings.token_factory_sandboxes_enabled is False
-    assert effective["decisions_tier_openrouter_enabled"] is False
     assert effective["token_factory_sandboxes_enabled"] is False

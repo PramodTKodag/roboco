@@ -70,9 +70,7 @@ def test_every_violation_is_reported_in_stable_order() -> None:
     assert caught.value.violations == ("ROBOCO_ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL")
 
 
-@pytest.mark.parametrize(
-    "flag", ["decisions_tier_openrouter_enabled", "token_factory_sandboxes_enabled"]
-)
+@pytest.mark.parametrize("flag", ["token_factory_sandboxes_enabled"])
 def test_alternate_provider_features_are_rejected(flag: str) -> None:
     with pytest.raises(SubscriptionPolicyViolation) as caught:
         validate_subscription_policy(_settings(**{flag: True}), environ={})
@@ -94,9 +92,7 @@ def test_policy_cannot_be_overridden_by_db(key: str) -> None:
         validate_setting(key, "anything")
 
 
-@pytest.mark.parametrize(
-    "flag", ["decisions_tier_openrouter_enabled", "token_factory_sandboxes_enabled"]
-)
+@pytest.mark.parametrize("flag", ["token_factory_sandboxes_enabled"])
 def test_alternate_provider_flag_cannot_be_enabled_through_settings_write(
     flag: str,
 ) -> None:

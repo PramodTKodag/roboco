@@ -1,11 +1,11 @@
-"""Pydantic models mirroring the OpenRouter Decisions wire format.
+"""Pydantic models mirroring the Decisions wire format.
 
 This is NOT the OpenAI-compatible chat endpoint: the Decisions API takes a
 ``state`` plus a map of typed ``questions`` and returns typed ``answers``
 (choice / score / noul) with calibrated confidence. Both tiers (the
-self-hosted roboco-decisions sidecar and the OpenRouter fallback) speak this exact
+self-hosted roboco-decisions sidecar's Clef and Laya backends) speak this exact
 shape, so one client serves both. Parsing is deliberately lenient: the
-endpoint is Alpha-tagged on OpenRouter's side, so unknown answer fields are
+endpoint is Alpha-tagged, so unknown answer fields are
 ignored and a missing ``confidence`` surfaces as ``None`` (every caller
 treats ``None`` as below-threshold, which is the fail-open direction).
 

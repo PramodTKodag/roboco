@@ -31,10 +31,10 @@ class TestParseLeniently:
             "usage": {"input_tokens": 476, "output_tokens": 70, "cost": 0.00002},
         }
         result = parse_decisions_payload(
-            payload, tier="openrouter", session_id="selfheal:run-1"
+            payload, tier="clef", session_id="selfheal:run-1"
         )
         assert result.model == "typesafe/jev-1.13-20260917"
-        assert result.tier == "openrouter"
+        assert result.tier == "clef"
         assert result.usage.cost == 0.00002
         is_transient = result.answer("is_transient")
         assert is_transient is not None

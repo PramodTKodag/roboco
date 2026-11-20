@@ -75,16 +75,11 @@ ALLOWED_SPAWN_SITES: dict[str, str] = {
     "roboco/services/release_readiness.py": HOST_GIT,
     "roboco/services/workspace.py": HOST_GIT,
     "roboco/services/gateway/content_actions.py": HOST_GIT,
-    "roboco/agent_sdk/grok_cli_session.py": LEGACY,
-    "roboco/agent_sdk/live_cli_session.py": LEGACY,
     "roboco/llm/providers/codex.py": LEGACY,
     "roboco/llm/providers/gemini.py": LEGACY,
     "roboco/llm/providers/grok.py": LEGACY,
-    "roboco/llm/providers/hummin.py": LEGACY,
-    "roboco/llm/providers/hummin_cli_config.py": LEGACY,
     "roboco/llm/providers/kimi.py": LEGACY,
     "roboco/llm/providers/nebius.py": LEGACY,
-    "roboco/llm/providers/openrouter.py": LEGACY,
     "roboco/runtime/engines/interactive_sessions.py": LEGACY,
 }
 REMOVAL_PENDING = frozenset({HOST_GIT, LEGACY})

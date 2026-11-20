@@ -82,9 +82,6 @@ from roboco.db.base import close_db, get_session_factory, init_db
 from roboco.logging import get_logger, setup_logging
 from roboco.runtime.subscription.policy import validate_subscription_policy
 from roboco.security import apply_guard, guarded_lifespan
-from roboco.services.decisions.resolver import (
-    check_openrouter_fallback_at_startup,
-)
 from roboco.services.extraction import ExtractionPipeline, ExtractionService
 from roboco.services.learning import get_learning_service
 from roboco.services.optimal import close_optimal_service, get_optimal_service
@@ -142,23 +139,6 @@ async def _apply_flag_overrides() -> None:
         logger.warning("Feature-flag overlay failed; using env defaults", error=str(e))
 
 
-async def _check_decisions_openrouter_key_at_startup() -> None:
-    """Decisions spec 4 startup key check: OpenRouter fallback opted in but
-    no OpenRouter key on the AI Provider screen means ONE ack-required CEO
-    notification naming the fix screen, and the resolver stays on the
-    self-hosted tiers (Clef, then Laya) for the process lifetime.
-    Best-effort: a failure here must never block startup, the per-call lazy
-    check still exists as a backstop."""
-    try:
-        async with get_session_factory()() as decisions_db:
-            await check_openrouter_fallback_at_startup(decisions_db)
-    except Exception as e:
-        logger.warning(
-            "Decisions OpenRouter startup key check failed; ignoring",
-            error=str(e),
-        )
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """
@@ -195,12 +175,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     await ensure_seed_user_startup()
 
     await _apply_flag_overrides()
-
-    # Decisions (spec 4): if the OpenRouter fallback is opted in but the AI
-    # Provider screen has no key, alert the CEO once now and resolve to the
-    # self-hosted tiers for the process lifetime. Best-effort: never blocks
-    # startup.
-    await _check_decisions_openrouter_key_at_startup()
 
     # Initialize Phase 2 services
     _AppServices.transcription = TranscriptionService()

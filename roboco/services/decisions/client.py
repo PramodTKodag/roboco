@@ -1,10 +1,9 @@
 """The one Decisions HTTP client, serving all tiers.
 
-``roboco-decisions`` (the self-hosted sidecar) mirrors the OpenRouter Decisions
-wire shape at ``/api/alpha/decisions``, so a single ``DecisionsClient``
-covers the self-hosted Clef tier (default, no auth, internal bridge), the
-cheap self-hosted Laya tier (same transport) and the OpenRouter fallback
-(bearer key, alpha endpoint). The resolver (``resolver.py``) picks the
+``roboco-decisions`` (the self-hosted sidecar) serves the Decisions wire
+shape at ``/api/alpha/decisions``, so a single ``DecisionsClient`` covers
+the self-hosted Clef tier (default, no auth, internal bridge) and the cheap
+self-hosted Laya tier (same transport). The resolver (``resolver.py``) picks the
 endpoint per call; this module only knows how to ask and parse.
 
 Doctrine (spec sections 4-5): one attempt, no retries, fail-open. ``None``
@@ -37,7 +36,6 @@ from roboco.services.decisions.schemas import (
     DecisionResult,
     parse_decisions_payload,
 )
-from roboco.services.decisions.spend_guard import record_402, record_spend
 
 logger = structlog.get_logger(__name__)
 
@@ -57,9 +55,8 @@ _DEFAULT_CAP_CHARS = 4_000
 # fitting under that ceiling with headroom for the render template.
 # Anything still large after the per-key caps silently truncates to mush
 # inside the model, so the total budget is enforced deterministically
-# here. The per-key caps above stay stage 1 for BOTH tiers (they are the
-# billing guard for the OpenRouter fallback); this stage-2 pass runs after
-# them, laya only, and is charged for the question text too (same
+# here. The per-key caps above stay stage 1 for BOTH tiers; this stage-2
+# pass runs after them, laya only, and is charged for the question text too (same
 # context). When the questions alone exhaust the budget, the state keeps
 # the floor below so a few short fields still mean something instead of
 # arriving as pure mush.
@@ -70,7 +67,7 @@ _LAYA_MIN_STATE_BUDGET_CHARS = 240
 # context on the sidecar's llama.cpp backend and reads the FULL rubric
 # tail (the failure that motivated the swap from the 1024-token Laya
 # checkpoint - a one-line rubric edit moved a score 0.13 -> 0.96 on Clef
-# in the Hummin calibration). 40k chars serialize to roughly 10-13k
+# in the decisions calibration). 40k chars serialize to roughly 10-13k
 # tokens, leaving headroom for questions + the render template under the
 # 16k ceiling. The same deterministic budget pass as Laya runs here; only
 # the constant differs. Clef's own median readout is model-native
@@ -93,11 +90,10 @@ _CIRCUIT_OPEN_SECONDS = 300.0
 class DecisionsEndpoint:
     """A concrete Decisions backend the resolver selected for one call."""
 
-    tier: str  # "clef" | "laya" | "openrouter"
+    tier: str  # "clef" | "laya"
     base_url: str
     model: str
     timeout_s: float
-    api_key: str | None = None
 
 
 def cap_text(text: str, cap_chars: int, *, keep_tail: bool = False) -> str:
@@ -294,9 +290,8 @@ class DecisionsClient:
             key: q.model_dump(exclude_none=True) for key, q in questions.items()
         }
 
-        # Two cap stages (spec 3.1): the per-key caps run first for BOTH
-        # tiers - they are the billing guard for the OpenRouter fallback.
-        # Both self-hosted tiers additionally get the deterministic
+        # Two cap stages (spec 3.1): the per-key caps run first, then both
+        # self-hosted tiers additionally get the deterministic
         # total-budget pass (per-tier constant), because a model context
         # turns any state still large after stage 1 into mush before a
         # single verdict is rendered - Clef just tolerates ~22x more of it.
@@ -328,12 +323,8 @@ class DecisionsClient:
             "questions": questions_payload,
             "session_id": session_id[:256],
         }
-        headers = {}
-        if endpoint.api_key:
-            headers["Authorization"] = f"Bearer {endpoint.api_key}"
-
         started = time.monotonic()
-        response = await self._post(endpoint, body, headers, circuit, session_id)
+        response = await self._post(endpoint, body, circuit, session_id)
         if response is None:
             return None
 
@@ -353,10 +344,6 @@ class DecisionsClient:
         # stays a pure wire-shape parser.
         result.state = capped_state
         result.questions = questions_payload
-        # Observe-only spend tracking (spec 3.1): usage.cost is summed per
-        # tier per UTC day and alerts once the daily threshold is crossed.
-        # Never affects the verdict or the fail-open behavior.
-        record_spend(result.tier, result.usage.cost)
         logger.info(
             "decision rendered",
             tier=result.tier,
@@ -375,7 +362,6 @@ class DecisionsClient:
         self,
         endpoint: DecisionsEndpoint,
         body: dict,
-        headers: dict[str, str],
         circuit: _Circuit,
         session_id: str,
     ) -> httpx.Response | None:
@@ -386,7 +372,6 @@ class DecisionsClient:
             return await client.post(
                 f"{endpoint.base_url.rstrip('/')}/api/alpha/decisions",
                 json=body,
-                headers=headers,
                 timeout=endpoint.timeout_s,
             )
         except (httpx.HTTPError, OSError) as exc:
@@ -410,11 +395,6 @@ class DecisionsClient:
         rejection counts a circuit failure and logs once, fail-open."""
         if response.status_code != httpx.codes.OK:
             circuit.record_failure()
-            # A 402 (payment required / credits exhausted) is observed-only
-            # spend-guard input (spec 3.1); two within an hour alert the CEO.
-            # The fail-open behavior below is unchanged.
-            if response.status_code == httpx.codes.PAYMENT_REQUIRED:
-                record_402(endpoint.tier)
             logger.warning(
                 "decisions backend returned an error; fail-open",
                 tier=endpoint.tier,
@@ -441,7 +421,7 @@ class DecisionsClient:
                 session_id=session_id,
             )
             return None
-        # An error envelope inside a 200 (OpenRouter does this under load):
+        # An error envelope inside a 200:
         # still a no-verdict, still fail-open, no retry.
         if isinstance(payload.get("error"), dict):
             circuit.record_failure()

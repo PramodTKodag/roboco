@@ -43,6 +43,12 @@ PROJECT_ID = uuid4()
 WORKSPACE = uuid4()
 
 
+@pytest.fixture(autouse=True)
+def _agent_auth_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run tokens are only minted when the agent auth secret is configured."""
+    monkeypatch.setenv("ROBOCO_AGENT_AUTH_SECRET", "test-secret-for-run-tokens")
+
+
 class FakeClient:
     def __init__(self, state: RunState = RunState.COMPLETED) -> None:
         self.state = state
@@ -87,7 +93,7 @@ class FakeRegistrar:
 def _launch(*, workspace: bool = True, model: str = "sonnet") -> RunLaunch:
     role = get_role_config("developer")
     return RunLaunch(
-        agent_slug="backend-dev-1",
+        agent_slug="be-dev-1",
         agent_id=uuid4(),
         role="developer",
         team="backend",
@@ -119,7 +125,7 @@ async def test_run_registers_worker_activates_scope_and_releases_both() -> None:
     client, registrar = FakeClient(), FakeRegistrar()
     supervisor, active = _supervisor(client, registrar)
     handle = await supervisor.start(_launch())
-    assert await _settle(supervisor, "backend-dev-1") == (False, 0)
+    assert await _settle(supervisor, "be-dev-1") == (False, 0)
     assert registrar.registered == [(UUID(handle), PROJECT_ID, WORKSPACE)]
     assert registrar.released == [UUID(handle)]
     assert not active.is_active(handle)
@@ -132,12 +138,12 @@ async def test_run_token_is_bound_to_this_run_and_agent() -> None:
     supervisor, _ = _supervisor(client, FakeRegistrar())
     launch = _launch()
     handle = await supervisor.start(launch)
-    await _settle(supervisor, "backend-dev-1")
+    await _settle(supervisor, "be-dev-1")
     credentials = client.credentials[0]
     assert credentials is not None
     claims = verify_run_token(credentials.token)
-    assert claims.run == handle
-    assert claims.id == str(launch.agent_id)
+    assert claims.run_id == handle
+    assert claims.agent_id == str(launch.agent_id)
     assert credentials.token not in client.specs[0].prompt
 
 
@@ -147,9 +153,9 @@ async def test_scope_is_active_while_the_run_is_in_flight() -> None:
     supervisor, active = _supervisor(client, FakeRegistrar())
     handle = await supervisor.start(_launch())
     assert active.is_active(handle)
-    assert supervisor.state("backend-dev-1") == (True, None)
+    assert supervisor.state("be-dev-1") == (True, None)
     client.release.set()
-    await _settle(supervisor, "backend-dev-1")
+    await _settle(supervisor, "be-dev-1")
     assert not active.is_active(handle)
 
 
@@ -167,7 +173,7 @@ async def test_terminal_states_map_to_the_parking_exit_codes(
 ) -> None:
     supervisor, _ = _supervisor(FakeClient(state), FakeRegistrar())
     await supervisor.start(_launch())
-    assert await _settle(supervisor, "backend-dev-1") == (False, code)
+    assert await _settle(supervisor, "be-dev-1") == (False, code)
 
 
 async def test_an_unroutable_model_never_starts_a_run() -> None:
@@ -177,7 +183,7 @@ async def test_an_unroutable_model_never_starts_a_run() -> None:
         await supervisor.start(_launch(model="some-other-model"))
     assert client.specs == []
     assert registrar.registered == []
-    assert not supervisor.owns("backend-dev-1")
+    assert not supervisor.owns("be-dev-1")
 
 
 async def test_worker_tools_without_a_launcher_refuse_before_any_scope() -> None:
@@ -193,7 +199,7 @@ async def test_a_run_without_a_workspace_never_touches_the_launcher() -> None:
     registrar = FakeRegistrar()
     supervisor, _ = _supervisor(FakeClient(), registrar)
     await supervisor.start(_launch(workspace=False))
-    await _settle(supervisor, "backend-dev-1")
+    await _settle(supervisor, "be-dev-1")
     assert registrar.registered == []
     assert registrar.released == []
 
@@ -206,7 +212,7 @@ async def test_a_crashing_client_is_a_failed_run_not_a_fallback() -> None:
     registrar = FakeRegistrar()
     supervisor, _ = _supervisor(Crashing(), registrar)
     await supervisor.start(_launch())
-    assert await _settle(supervisor, "backend-dev-1") == (False, FAILED_EXIT_CODE)
+    assert await _settle(supervisor, "be-dev-1") == (False, FAILED_EXIT_CODE)
     assert len(registrar.released) == 1
 
 
@@ -215,12 +221,12 @@ async def test_cancel_revokes_scope_and_stops_the_run() -> None:
     client.release.clear()
     supervisor, active = _supervisor(client, FakeRegistrar())
     handle = await supervisor.start(_launch())
-    await supervisor.cancel("backend-dev-1")
+    await supervisor.cancel("be-dev-1")
     assert not active.is_active(handle)
     assert client.cancelled == [UUID(handle)]
-    supervisor.forget("backend-dev-1")
-    assert not supervisor.owns("backend-dev-1")
-    await supervisor.cancel("backend-dev-1")
+    supervisor.forget("be-dev-1")
+    assert not supervisor.owns("be-dev-1")
+    await supervisor.cancel("be-dev-1")
 
 
 def test_model_tiers_resolve_to_exactly_one_allowed_id() -> None:
@@ -274,7 +280,7 @@ def test_supervisor_is_not_built_without_a_service(tmp_path) -> None:
         build_run_supervisor(no_token)  # type: ignore[arg-type]
 
 
-def _agent_config(tmp_path, agent_id: str = "backend-dev-1") -> SimpleNamespace:
+def _agent_config(tmp_path, agent_id: str = "be-dev-1") -> SimpleNamespace:
     blueprint = tmp_path / "blueprint.md"
     blueprint.write_text("blueprint text")
     return SimpleNamespace(

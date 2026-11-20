@@ -1498,8 +1498,6 @@ def _register_tools() -> list[str]:
     missing rather than silently exposing the full do-tool set (which
     includes ``commit`` — the role-gate would reject it server-side, but
     the agent shouldn't see it on its tool palette in the first place).
-    ``ROBOCO_ALLOW_FULL_TOOLSET`` is a dev/test escape hatch that registers
-    the full tool set instead of raising (#162); default-off.
 
     Returns the list of tool names actually registered.
     """
@@ -1508,24 +1506,13 @@ def _register_tools() -> list[str]:
         manifest_path = os.environ.get(
             "ROBOCO_TOOL_MANIFEST_PATH", "/app/tool-manifest.json"
         )
-        if os.environ.get("ROBOCO_ALLOW_FULL_TOOLSET"):
-            log.warning(
-                "do_server: manifest missing — ROBOCO_ALLOW_FULL_TOOLSET set,"
-                " registering the full tool set (dev/test only)",
-                role=AGENT_ROLE,
-                path=manifest_path,
-            )
-            allowed = list(_TOOLS.keys())
-        else:
-            msg = (
-                f"do_server: manifest unavailable at {manifest_path};"
-                f" refusing to register all-tools fallback for role"
-                f" {AGENT_ROLE!r}. Check the orchestrator manifest mount."
-            )
-            log.error(
-                "do_server: manifest missing", role=AGENT_ROLE, path=manifest_path
-            )
-            raise RuntimeError(msg)
+        msg = (
+            f"do_server: manifest unavailable at {manifest_path};"
+            f" refusing to register all-tools fallback for role"
+            f" {AGENT_ROLE!r}. Check the orchestrator manifest mount."
+        )
+        log.error("do_server: manifest missing", role=AGENT_ROLE, path=manifest_path)
+        raise RuntimeError(msg)
     unknown = [verb for verb in allowed if verb not in _TOOLS]
     if unknown:
         log.warning(

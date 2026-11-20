@@ -3,8 +3,8 @@ of the Decisions service, docs/internal/decisions-spec.md sections 8
 Stage 0.5 and 10).
 
 The sidecar is an inert-until-armed HTTP service (Clef 27B + Laya 421M
-typed decisions over llama.cpp backends behind one proxy, mirroring the
-OpenRouter Decisions wire shape). Its compose contract is deliberately
+typed decisions over llama.cpp backends behind one proxy, speaking the
+Decisions wire shape). Its compose contract is deliberately
 narrow:
 
 - it exists in BOTH compose files (build + registry), byte-consistent with
@@ -42,7 +42,6 @@ _DECISIONS_ENV_KEYS = (
     "ROBOCO_DECISIONS_BASE_URL",
     "ROBOCO_DECISIONS_TIER_CLEF_ENABLED",
     "ROBOCO_DECISIONS_TIER_LAYA_ENABLED",
-    "ROBOCO_DECISIONS_TIER_OPENROUTER_ENABLED",
 )
 
 
@@ -129,9 +128,6 @@ def test_sidecar_resolver_url_points_at_container() -> None:
         assert env.get("ROBOCO_DECISIONS_TIER_LAYA_ENABLED") == (
             "${ROBOCO_DECISIONS_TIER_LAYA_ENABLED:-true}"
         ), f"{name}: the cheap Laya tier is the built-in fallback and must default ON"
-        assert env.get("ROBOCO_DECISIONS_TIER_OPENROUTER_ENABLED") == (
-            "${ROBOCO_DECISIONS_TIER_OPENROUTER_ENABLED:-false}"
-        ), f"{name}: the OpenRouter fallback tier is OPT-IN and must default OFF"
 
 
 def test_pilot_arming_masters_are_split_nas_vs_registry() -> None:

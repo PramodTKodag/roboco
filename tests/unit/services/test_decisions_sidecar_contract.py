@@ -1,8 +1,8 @@
 """Contract test: the roboco-decisions sidecar's responses must parse under the
-same schemas.py as OpenRouter's (spec sections 4 and 10). The sidecar
-mirrors the OpenRouter Decisions wire shape, so this fixture pins that
-contract offline: if the container's proxy ever drifts from the wire
-shape, this fails before the resolver falls over.
+same schemas.py the Decisions client uses (spec sections 4 and 10). The sidecar
+speaks the Decisions wire shape, so this fixture pins that contract offline:
+if the container's proxy ever drifts from the wire shape, this fails before the
+resolver falls over.
 
 The canned fixture pins the wire SHAPE; the adapter tests below import
 the sidecar's REAL ``build_answers`` out of ``docker/decisions/server.py``

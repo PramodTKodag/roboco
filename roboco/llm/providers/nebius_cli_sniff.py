@@ -11,8 +11,7 @@ and a commit hash or item id can contain the substring "429" or "401"
 (:mod:`roboco.llm.providers.kimi_cli_sniff` /
 :mod:`roboco.llm.providers.codex_cli_sniff`
 document this failure class in detail - this module mirrors their structural
-fix, and is the Nebius twin of
-:mod:`roboco.llm.providers.openrouter_cli_sniff`).
+fix).
 
 The fix is structural, not a pattern tweak: extract ONLY a structured
 ``error`` field off ``type: "error"`` JSONL events (opencode's error-event
@@ -39,7 +38,7 @@ The entrypoint calls this as ``python -m roboco.llm.providers.nebius_cli_sniff
 <run_log> [err_log]``, printing ``rate_limit`` / ``auth`` / an empty line;
 the entrypoint maps rate_limit to exit 75 and auth to exit 78 so the
 orchestrator's existing park-and-probe logic (scoped by provider_type) handles
-the Nebius provider identically to grok/codex/gemini/kimi/openrouter.
+the Nebius provider identically to grok/codex/gemini/kimi.
 """
 
 from __future__ import annotations

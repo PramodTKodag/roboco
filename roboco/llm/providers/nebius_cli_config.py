@@ -23,12 +23,9 @@ found at run time. The config carries:
     URL, ``env`` the env-var names it reads, ``npm`` the AI SDK package).
 
 Keeping the translation in importable Python (not a shell heredoc) makes it
-unit-testable, mirroring :mod:`roboco.llm.providers.openrouter_cli_config`
-(this module is its Nebius twin - the permission model, bash-guard plugin,
-and config shape are byte-identical by design; only the provider block, the
-model-ref prefix, and the auth env differ).
+unit-testable.
 
-Nebius-specific notes (where Token Factory differs from OpenRouter):
+Nebius-specific notes:
 
   * **provider transport** - Token Factory is a plain OpenAI-compatible
     endpoint (no provider-specific AI SDK), so the block uses opencode's
@@ -234,7 +231,7 @@ def opencode_model_ref(model: str) -> str:
     super-120b``) in ``ROBOCO_AGENT_MODEL`` - passed through verbatim,
     opencode resolves it against its BUILT-IN ``anthropic`` provider (which
     expects ``ANTHROPIC_API_KEY``, never set in this image) and the run
-    cannot authenticate (live-verified on the openrouter twin). Prefixing
+    cannot authenticate (live-verified). Prefixing
     with opencode's own provider id from the rendered ``provider.nebius``
     block routes every call through Nebius:
     ``nebius/nvidia/nemotron-3-super-120b-a12b``. Idempotent - an
@@ -270,7 +267,7 @@ def render_provider_block(base_url: str) -> dict[str, dict[str, Any]]:
     ``api`` is the Token Factory endpoint; ``env`` names the env var opencode
     reads for the key (NEBIUS_API_KEY, injected at spawn); ``npm`` is the
     generic OpenAI-compatible AI SDK package (Token Factory needs no
-    vendor-specific transport, unlike OpenRouter's). ``name`` is the display
+    vendor-specific transport). ``name`` is the display
     label.
     """
     return {
@@ -482,9 +479,8 @@ def main(argv: list[str] | None = None) -> int:
 
     config = render_config(role, model, base_url, mcp_path)
     # The agent image does not pre-create opencode's global config home, so
-    # the render must mkdir the parent itself (the openrouter twin's #1110
-    # regression - this port predates it and every Nebius-routed spawn exited
-    # 1 on FileNotFoundError before the CLI started). The plugin write below
+    # the render must mkdir the parent itself (otherwise every Nebius-routed
+    # spawn exits 1 on FileNotFoundError before the CLI starts). The plugin write below
     # already mkdirs its own parents.
     OPENCODE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     OPENCODE_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")

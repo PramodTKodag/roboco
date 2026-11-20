@@ -20,14 +20,11 @@ from roboco.api.schemas.provider import (
     CatalogEntryResponse,
     ComplexityOverrideRequest,
     ComplexityOverrideResponse,
-    DecisionsStatus,
     GrokKeyStatus,
-    HumminKeyStatus,
     ModeResponse,
     NebiusKeyStatus,
     OllamaKeyStatus,
-    OpenRouterKeyStatus,
-    OpenRouterModelEntry,
+    ProviderModelEntry,
     RoutingPresetApplyResponse,
     RoutingPresetSummary,
     SaveRoutingPresetRequest,
@@ -36,10 +33,8 @@ from roboco.api.schemas.provider import (
     SelfHostedModelEntry,
     SelfHostedTestResponse,
     SetGrokKeyRequest,
-    SetHumminKeyRequest,
     SetNebiusKeyRequest,
     SetOllamaKeyRequest,
-    SetOpenRouterKeyRequest,
     SetZaiKeyRequest,
     ZaiKeyStatus,
     assignment_to_response,
@@ -61,7 +56,6 @@ from roboco.services.llm import (
     get_model_routing_service,
     probe_nebius_models,
     probe_ollama_tags,
-    probe_openrouter_models,
 )
 from roboco.services.provider import ProviderUpdate, get_provider_service
 from roboco.utils.converters import require_uuid
@@ -223,66 +217,6 @@ async def set_grok_key(
 
 
 # =============================================================================
-# OPENROUTER API KEY
-# =============================================================================
-
-
-@router.get("/openrouter-key", response_model=OpenRouterKeyStatus)
-async def get_openrouter_key_status(
-    db: DbSession,
-    agent: CurrentAgentContext,
-) -> OpenRouterKeyStatus:
-    """Return whether the OpenRouter key is set + enabled."""
-    require_pm_or_above(agent.role, "view the OpenRouter key status")
-    provider_svc = get_provider_service(db)
-    providers = await provider_svc.list_providers(include_disabled=True)
-    openrouter = next(
-        (p for p in providers if p.type == ModelProvider.OPENROUTER),
-        None,
-    )
-    if openrouter is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="OpenRouter provider not seeded. Run alembic upgrade head.",
-        )
-    return OpenRouterKeyStatus(
-        has_key=bool(openrouter.auth_token_encrypted),
-        enabled=openrouter.enabled,
-    )
-
-
-@router.put("/openrouter-key", response_model=OpenRouterKeyStatus)
-@guard_deco.rate_limit(requests=10, window=60)
-@guard_deco.max_request_size(size_bytes=8192)
-@guard_deco.block_clouds()
-@guard_deco.content_type_filter(["application/json"])
-@guard_deco.honeypot_detection(["email", "phone", "website"])
-@guard_deco.usage_monitor(max_calls=30, window=3600)
-async def set_openrouter_key(
-    data: SetOpenRouterKeyRequest,
-    db: DbSession,
-    agent: CurrentAgentContext,
-) -> OpenRouterKeyStatus:
-    """Set or clear the OpenRouter API key.
-
-    Empty string → clears and disables the provider. Any other value →
-    Fernet-encrypts + marks enabled. Used against
-    https://openrouter.ai/api/v1.
-    """
-    require_pm_or_above(agent.role, "set the OpenRouter key")
-    routing = get_model_routing_service(db)
-    try:
-        provider = await routing.set_openrouter_api_key(data.api_key)
-    except NotFoundError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    await db.commit()
-    return OpenRouterKeyStatus(
-        has_key=bool(provider.auth_token_encrypted),
-        enabled=provider.enabled,
-    )
-
-
-# =============================================================================
 # ZAI API KEY
 # =============================================================================
 
@@ -337,166 +271,6 @@ async def set_zai_key(
         has_key=bool(provider.auth_token_encrypted),
         enabled=provider.enabled,
     )
-
-
-# =============================================================================
-# HUMMIN (GLM Coding Plan) API KEY
-# =============================================================================
-
-
-@router.get("/hummin-key", response_model=HumminKeyStatus)
-async def get_hummin_key_status(
-    db: DbSession,
-    agent: CurrentAgentContext,
-) -> HumminKeyStatus:
-    """Return whether the hummin provider's Z.ai key is set + enabled."""
-    require_pm_or_above(agent.role, "view the hummin key status")
-    provider_svc = get_provider_service(db)
-    providers = await provider_svc.list_providers(include_disabled=True)
-    hummin = next((p for p in providers if p.type == ModelProvider.HUMMIN), None)
-    if hummin is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="hummin provider not seeded. Run alembic upgrade head.",
-        )
-    return HumminKeyStatus(
-        has_key=bool(hummin.auth_token_encrypted),
-        enabled=hummin.enabled,
-    )
-
-
-@router.put("/hummin-key", response_model=HumminKeyStatus)
-@guard_deco.rate_limit(requests=10, window=60)
-@guard_deco.max_request_size(size_bytes=8192)
-@guard_deco.block_clouds()
-@guard_deco.content_type_filter(["application/json"])
-@guard_deco.honeypot_detection(["email", "phone", "website"])
-@guard_deco.usage_monitor(max_calls=30, window=3600)
-async def set_hummin_key(
-    data: SetHumminKeyRequest,
-    db: DbSession,
-    agent: CurrentAgentContext,
-) -> HumminKeyStatus:
-    """Set or clear the hummin provider's Z.ai key.
-
-    Empty string → clears and disables the provider. Any other value →
-    Fernet-encrypts + marks enabled. The key is the operator's Z.ai key for
-    the GLM Coding Plan; it rides to the container as ZAI_API_KEY at spawn
-    (see roboco.llm.providers.hummin).
-    """
-    require_pm_or_above(agent.role, "set the hummin key")
-    routing = get_model_routing_service(db)
-    try:
-        provider = await routing.set_hummin_api_key(data.api_key)
-    except NotFoundError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e)) from e
-    await db.commit()
-    return HumminKeyStatus(
-        has_key=bool(provider.auth_token_encrypted),
-        enabled=provider.enabled,
-    )
-
-
-# =============================================================================
-# DECISIONS TIER STATUS (backs the AI Providers warning banner)
-# =============================================================================
-
-
-@router.get("/decisions-status", response_model=DecisionsStatus)
-async def get_decisions_status(
-    db: DbSession,
-    agent: CurrentAgentContext,
-) -> DecisionsStatus:
-    """Report the Decisions service's OpenRouter fallback-tier readiness.
-
-    Reads the two roboco.config flags (panel-persisted feature-flag overrides
-    are applied to this singleton at startup) and whether the seeded
-    OPENROUTER provider row carries a stored key. Booleans only: the key
-    itself is never returned. The panel shows a warning banner when
-    `openrouter_opted_in` is true but `openrouter_key_present` is false, so a
-    silently unauthenticated fallback tier is never a surprise.
-    """
-    require_pm_or_above(agent.role, "view the Decisions tier status")
-    provider_svc = get_provider_service(db)
-    providers = await provider_svc.list_providers(include_disabled=True)
-    openrouter = next(
-        (p for p in providers if p.type == ModelProvider.OPENROUTER),
-        None,
-    )
-    return DecisionsStatus(
-        decisions_enabled=bool(getattr(roboco_settings, "decisions_enabled", False)),
-        openrouter_opted_in=bool(
-            getattr(roboco_settings, "decisions_tier_openrouter_enabled", False)
-        ),
-        openrouter_key_present=bool(openrouter.auth_token_encrypted)
-        if openrouter is not None
-        else False,
-    )
-
-
-# =============================================================================
-# OPENROUTER MODEL SEARCH (live catalog proxy)
-# =============================================================================
-
-
-@router.get("/openrouter/models", response_model=list[OpenRouterModelEntry])
-async def get_openrouter_models(
-    db: DbSession,
-    agent: CurrentAgentContext,
-    q: str = "",
-) -> list[OpenRouterModelEntry]:
-    """Proxy a model search to OpenRouter's live API.
-
-    Returns only models that support tool calls, filtered by the ``q``
-    substring (case-insensitive match on model id / name). Raises 400 if
-    no OpenRouter API key is configured. The key is decrypted server-side
-    and never reaches the browser.
-    """
-    require_pm_or_above(agent.role, "search OpenRouter models")
-    provider_svc = get_provider_service(db)
-    providers = await provider_svc.list_providers(include_disabled=True)
-    openrouter = next(
-        (p for p in providers if p.type == ModelProvider.OPENROUTER),
-        None,
-    )
-    if openrouter is None or not openrouter.auth_token_encrypted:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "OpenRouter API key is not configured. "
-                "Set it first via PUT /providers/openrouter-key."
-            ),
-        )
-    api_key = await provider_svc.get_decrypted_token(require_uuid(openrouter.id))
-    if not api_key:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "OpenRouter API key is not configured. "
-                "Set it first via PUT /providers/openrouter-key."
-            ),
-        )
-    models, error = await probe_openrouter_models(api_key, query=q)
-    if error is not None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"OpenRouter model search failed: {error}",
-        )
-    entries: list[OpenRouterModelEntry] = []
-    for m in models:
-        pricing = m.get("pricing") or {}
-        prompt_price = safe_float(pricing.get("prompt"))
-        completion_price = safe_float(pricing.get("completion"))
-        entries.append(
-            OpenRouterModelEntry(
-                id=m.get("id", ""),
-                name=m.get("name", ""),
-                context_length=m.get("context_length"),
-                prompt_price=prompt_price,
-                completion_price=completion_price,
-            )
-        )
-    return entries
 
 
 # =============================================================================
@@ -564,18 +338,18 @@ async def set_nebius_key(
 # =============================================================================
 
 
-@router.get("/nebius/models", response_model=list[OpenRouterModelEntry])
+@router.get("/nebius/models", response_model=list[ProviderModelEntry])
 async def get_nebius_models(
     db: DbSession,
     agent: CurrentAgentContext,
     q: str = "",
-) -> list[OpenRouterModelEntry]:
+) -> list[ProviderModelEntry]:
     """Proxy a model search to Nebius Token Factory's live API.
 
     Filtered by the ``q`` substring (case-insensitive match on model id /
     name). Raises 400 if no Nebius API key is configured. The key is
     decrypted server-side and never reaches the browser. Reuses the
-    OpenRouterModelEntry shape (the OpenAI-compatible list carries the same
+    ProviderModelEntry shape (the OpenAI-compatible list carries the same
     fields, mostly absent, so the nullable shape serves both).
     """
     require_pm_or_above(agent.role, "search Nebius models")
@@ -608,11 +382,11 @@ async def get_nebius_models(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Nebius model search failed: {error}",
         )
-    entries: list[OpenRouterModelEntry] = []
+    entries: list[ProviderModelEntry] = []
     for m in models:
         pricing = m.get("pricing") or {}
         entries.append(
-            OpenRouterModelEntry(
+            ProviderModelEntry(
                 id=m.get("id", ""),
                 name=m.get("name", ""),
                 context_length=m.get("context_length"),

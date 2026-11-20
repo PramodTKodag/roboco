@@ -12,7 +12,6 @@ from roboco.models.base import AssignmentScope, ModelProvider
 from roboco.models.llm_catalog import MODEL_CATALOG
 from roboco.services.base import NotFoundError
 from roboco.services.llm import (
-    _HUMMIN_ROLE_TIERS,
     ModelRoutingService,
     get_model_routing_service,
 )
@@ -79,32 +78,15 @@ async def llm_setup(
         type=ModelProvider.KIMI,
         enabled=True,
     )
-    # Mirrors migration 096_seed_openrouter_provider's contract: enabled=False
-    # at seed time (key-gated, like GROK) - no base_url, no key until the
-    # operator sets one via set_openrouter_api_key.
-    openrouter = ProviderConfigTable(
-        name="openrouter-test",
-        type=ModelProvider.OPENROUTER,
-        enabled=False,
-    )
     # Mirrors migration 100_seed_nebius_provider's contract: enabled=False at
-    # seed time (key-gated, like GROK/OPENROUTER) - no base_url, no key until
+    # seed time (key-gated, like GROK) - no base_url, no key until
     # the operator sets one via set_nebius_api_key.
     nebius = ProviderConfigTable(
         name="nebius-test",
         type=ModelProvider.NEBIUS,
         enabled=False,
     )
-    # Mirrors migration 102_seed_hummin_provider's contract: enabled=True
-    # from birth (spawn-time key check is the gate, not the row).
-    hummin = ProviderConfigTable(
-        name="hummin-test",
-        type=ModelProvider.HUMMIN,
-        enabled=True,
-    )
-    db_session.add_all(
-        [anthropic, grok, ollama, openai, gemini, kimi, openrouter, nebius, hummin]
-    )
+    db_session.add_all([anthropic, grok, ollama, openai, gemini, kimi, nebius])
     await db_session.flush()
     yield {"svc": ModelRoutingService(db_session)}
 
@@ -273,43 +255,6 @@ async def test_derive_mode_gemini_when_only_gemini_global(llm_setup: dict) -> No
 
 
 @pytest.mark.asyncio
-async def test_derive_mode_hummin_with_seeded_role_tiers(llm_setup: dict) -> None:
-    """The hummin state apply_mode writes (GLOBAL default + the seeded
-    oversight/delivery ROLE tiers) derives as "hummin", not "mix".
-
-    Regression: derive_mode only recognized exactly-one-assignment states, so
-    the mode button's own seeded ROLE rows tripped the catch-all — clicking
-    hummin reported "mix" forever, on every apply, including the fresh GET
-    the panel renders right after (2026-09-27 CEO report).
-    """
-    svc = llm_setup["svc"]
-    await svc.apply_mode(mode="hummin")
-    assert await svc.derive_mode() == "hummin"
-
-
-@pytest.mark.asyncio
-async def test_derive_mode_hummin_survives_agent_pin_and_complexity_override(
-    llm_setup: dict,
-) -> None:
-    """AGENT_SLUG pins and compound ROLE":"complexity overrides are operator
-    layers that survive every mode switch — they never flip the label to
-    "mix" (the UI surfaces them separately)."""
-    svc = llm_setup["svc"]
-    await svc.apply_mode(mode="hummin")
-    await svc.upsert_assignment(
-        scope=AssignmentScope.AGENT_SLUG,
-        scope_value="be-dev-1",
-        model_name=_first_model_for_type(ModelProvider.OPENAI),
-    )
-    await svc.upsert_assignment(
-        scope=AssignmentScope.ROLE,
-        scope_value="developer:low",
-        model_name=_first_model_for_type(ModelProvider.GROK),
-    )
-    assert await svc.derive_mode() == "hummin"
-
-
-@pytest.mark.asyncio
 async def test_derive_mode_kimi_survives_agent_pin(llm_setup: dict) -> None:
     """Same carve-out for a single-GLOBAL mode: GLOBAL kimi + an AGENT_SLUG
     pin reports "kimi" — the pin is a per-agent override, not mode state."""
@@ -328,7 +273,7 @@ async def test_derive_mode_mix_when_plain_role_row_differs(llm_setup: dict) -> N
     """A plain ROLE row re-pointed at another provider IS genuine mixing of
     the mode-authored rows — the catch-all applies."""
     svc = llm_setup["svc"]
-    await svc.apply_mode(mode="hummin")
+    await svc.apply_mode(mode="kimi")
     await svc.upsert_assignment(
         scope=AssignmentScope.ROLE,
         scope_value="developer",
@@ -465,61 +410,6 @@ async def test_apply_mode_grok_enables_grok_provider(llm_setup: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_apply_mode_hummin_seeds_role_tiers(llm_setup: dict) -> None:
-    """apply_mode('hummin') seeds the oversight/delivery role split on top of
-    the GLOBAL default: board/reviewer/main-PM roles on the high-thinking
-    flash variant, delivery roles on the low-thinking flash variant. Idempotent
-    on re-apply; AGENT_SLUG pins survive untouched."""
-    svc = llm_setup["svc"]
-    await svc.upsert_assignment(
-        scope=AssignmentScope.AGENT_SLUG,
-        scope_value="be-dev-1",
-        model_name="glm-5.3-flash",
-    )
-    await svc.apply_mode(mode="hummin")
-    await svc.apply_mode(mode="hummin")  # idempotent re-apply
-
-    assignments = await svc.list_assignments()
-    by_key = {(a.scope, a.scope_value): a.model_name for a in assignments}
-    assert by_key[(AssignmentScope.GLOBAL, None)] == "glm-5.3-flash:high"
-    assert by_key[(AssignmentScope.ROLE, "auditor")] == "glm-5.3-flash:high"
-    assert by_key[(AssignmentScope.ROLE, "product_owner")] == "glm-5.3-flash:high"
-    assert by_key[(AssignmentScope.ROLE, "head_marketing")] == "glm-5.3-flash:high"
-    assert by_key[(AssignmentScope.ROLE, "pr_reviewer")] == "glm-5.3-flash:high"
-    assert by_key[(AssignmentScope.ROLE, "main_pm")] == "glm-5.3-flash:high"
-    assert by_key[(AssignmentScope.ROLE, "developer")] == "glm-5.3-flash:low"
-    assert by_key[(AssignmentScope.ROLE, "qa")] == "glm-5.3-flash:low"
-    assert by_key[(AssignmentScope.ROLE, "documenter")] == "glm-5.3-flash:low"
-    assert by_key[(AssignmentScope.ROLE, "cell_pm")] == "glm-5.3-flash:low"
-    # Re-apply must upsert, not duplicate.
-    role_rows = [a for a in assignments if a.scope == AssignmentScope.ROLE]
-    assert len(role_rows) == len(_HUMMIN_ROLE_TIERS)
-    # Per-agent pins are outside mode state.
-    assert by_key[(AssignmentScope.AGENT_SLUG, "be-dev-1")] == "glm-5.3-flash"
-
-
-@pytest.mark.asyncio
-async def test_apply_mode_hummin_enables_provider(llm_setup: dict) -> None:
-    svc = llm_setup["svc"]
-    provider_svc = ProviderService(svc.session)
-    hummin = next(
-        p
-        for p in await provider_svc.list_providers(include_disabled=True)
-        if p.type == ModelProvider.HUMMIN
-    )
-    await provider_svc.update_provider(
-        cast("UUID", hummin.id), ProviderUpdate(enabled=False)
-    )
-    await svc.session.flush()
-
-    await svc.apply_mode(mode="hummin")
-
-    refetched = await provider_svc.get_provider(cast("UUID", hummin.id))
-    assert refetched is not None
-    assert refetched.enabled is True
-
-
-@pytest.mark.asyncio
 async def test_apply_mode_codex_sets_global(llm_setup: dict) -> None:
     svc = llm_setup["svc"]
     await svc.apply_mode(mode="codex")
@@ -623,94 +513,6 @@ async def test_apply_mode_kimi_enables_kimi_provider(llm_setup: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_apply_mode_openrouter_sets_global(llm_setup: dict) -> None:
-    """apply_mode('openrouter') wipes assignments and sets a GLOBAL default
-    to the OpenRouter model via provider_type_override (OpenRouter models
-    are NOT in the static catalog)."""
-    svc = llm_setup["svc"]
-    await svc.apply_mode(mode="openrouter")
-    assignments = await svc.list_assignments()
-    assert len(assignments) == 1
-    assert assignments[0].scope == AssignmentScope.GLOBAL
-    assert assignments[0].model_name == "deepseek/deepseek-chat"
-    assert assignments[0].provider.type == ModelProvider.OPENROUTER
-
-
-@pytest.mark.asyncio
-async def test_apply_mode_openrouter_custom_model(llm_setup: dict) -> None:
-    """apply_mode('openrouter', default_model=X) stores X directly via
-    provider_type_override — no catalog lookup, no ValueError."""
-    svc = llm_setup["svc"]
-    await svc.apply_mode(mode="openrouter", default_model="qwen/qwen-2.5-72b-instruct")
-    assignments = await svc.list_assignments()
-    assert assignments[0].model_name == "qwen/qwen-2.5-72b-instruct"
-    assert assignments[0].provider.type == ModelProvider.OPENROUTER
-
-
-@pytest.mark.asyncio
-async def test_apply_mode_openrouter_enables_provider(llm_setup: dict) -> None:
-    """apply_mode('openrouter') force-enables the OPENROUTER row —
-    belt-and-suspenders against a row disabled by a key clear."""
-    svc = llm_setup["svc"]
-    provider_svc = ProviderService(svc.session)
-    openrouter = next(
-        p
-        for p in await provider_svc.list_providers(include_disabled=True)
-        if p.type == ModelProvider.OPENROUTER
-    )
-    assert openrouter.enabled is False  # seeded disabled in fixture
-    await svc.apply_mode(mode="openrouter")
-    refetched = await provider_svc.get_provider(cast("UUID", openrouter.id))
-    assert refetched is not None
-    assert refetched.enabled is True
-
-
-@pytest.mark.asyncio
-async def test_derive_mode_openrouter_when_only_openrouter_global(
-    llm_setup: dict,
-) -> None:
-    """A pure-OPENROUTER global assignment reports "openrouter", not the
-    catch-all "mix" (the original derive_mode returned for any single
-    GLOBAL row it did not know)."""
-    svc = llm_setup["svc"]
-    await svc.upsert_assignment(
-        scope=AssignmentScope.GLOBAL,
-        scope_value=None,
-        model_name="deepseek/deepseek-chat",
-        provider_type_override=ModelProvider.OPENROUTER,
-    )
-    assert await svc.derive_mode() == "openrouter"
-
-
-@pytest.mark.asyncio
-async def test_set_openrouter_api_key_encrypts_and_enables(
-    llm_setup: dict,
-) -> None:
-    """set_openrouter_api_key encrypts the key and enables the provider row,
-    mirroring set_grok_api_key. Empty string clears + disables."""
-    svc = llm_setup["svc"]
-    provider = await svc.set_openrouter_api_key("sk-or-test-key-12345")
-    assert provider.auth_token_encrypted is not None
-    assert provider.enabled is True
-    # Key never stored in plaintext
-    assert "sk-or-test-key-12345" not in str(provider.auth_token_encrypted)
-
-    # Clear
-    provider = await svc.set_openrouter_api_key("")
-    assert provider.auth_token_encrypted is None
-    assert provider.enabled is False
-
-
-@pytest.mark.asyncio
-async def test_apply_mode_openrouter_end_to_end_reachable(llm_setup: dict) -> None:
-    """The full reachability chain: apply_mode -> derive_mode reflects it ->
-    resolve_for_agent routes to the OpenRouter provider."""
-    svc = llm_setup["svc"]
-    await svc.apply_mode(mode="openrouter")
-    assert await svc.derive_mode() == "openrouter"
-
-
-@pytest.mark.asyncio
 async def test_apply_mode_nebius_sets_global(llm_setup: dict) -> None:
     """apply_mode('nebius') wipes assignments and sets a GLOBAL default
     to the Nebius model via provider_type_override (Token Factory models
@@ -775,7 +577,7 @@ async def test_set_nebius_api_key_encrypts_and_enables(
     llm_setup: dict,
 ) -> None:
     """set_nebius_api_key encrypts the key and enables the provider row,
-    mirroring set_openrouter_api_key. Empty string clears + disables."""
+    mirroring set_grok_api_key. Empty string clears + disables."""
     svc = llm_setup["svc"]
     provider = await svc.set_nebius_api_key("nebius-test-key-12345")
     assert provider.auth_token_encrypted is not None
@@ -844,9 +646,8 @@ async def test_apply_mode_mix_writes_overrides(llm_setup: dict) -> None:
 @pytest.mark.asyncio
 async def test_apply_mode_mix_pins_nebius_catalog_model(llm_setup: dict) -> None:
     """The live-verified Nemotron ids are catalog members, so a Mix-mode
-    per-agent pin resolves to the NEBIUS provider row (auto-enabled, same
-    as the openrouter precedent) instead of being rejected as an unknown
-    model. This is the routing half of the Nebius levels-parity batch."""
+    per-agent pin resolves to the NEBIUS provider row (auto-enabled) instead of
+    being rejected as an unknown model. This is the routing half of the Nebius levels-parity batch."""
     svc = llm_setup["svc"]
     await svc.apply_mode(
         mode="mix",

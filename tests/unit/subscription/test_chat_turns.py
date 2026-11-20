@@ -28,8 +28,7 @@ from roboco.services.prompter_live import PrompterLiveRegistry
 
 SESSION = "3f2a9c10aabbccdd"
 DRAFT_REPLY = (
-    "Here is the spec.\n```roboco-draft\n"
-    '{"title": "Add export", "the_work": []}\n```\n'
+    'Here is the spec.\n```roboco-draft\n{"title": "Add export", "the_work": []}\n```\n'
 )
 
 

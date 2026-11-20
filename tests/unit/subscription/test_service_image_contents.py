@@ -46,10 +46,15 @@ _FORBIDDEN_PREFIXES = (
 )
 
 
+_MODULE_MARK = "imported-module:"
+
+
 def _closure_probe(entrypoint: str) -> str:
+    # Entrypoints may log to stdout while importing; only marked lines count.
     return (
-        f"import sys, {entrypoint};"
-        "print('\\n'.join(sorted(m for m in sys.modules if m.startswith('roboco'))))"
+        f"import sys, {entrypoint}; _MODULE_MARK = {_MODULE_MARK!r};"
+        "print('\\n'.join(f'{_MODULE_MARK}{m}' for m in sorted(sys.modules) "
+        "if m.startswith('roboco')))"
     )
 
 
@@ -59,14 +64,19 @@ def _imported_roboco_modules(entrypoint: str, manifest: Path) -> list[str]:
         **_VERB_SERVER_ENV,
         "ROBOCO_TOOL_MANIFEST_PATH": str(manifest),
     }
-    return subprocess.run(
+    stdout = subprocess.run(
         [sys.executable, "-P", "-c", _closure_probe(entrypoint)],
         cwd=_REPO_ROOT,
         env=env,
         capture_output=True,
         text=True,
         check=True,
-    ).stdout.split()
+    ).stdout
+    return [
+        line.removeprefix(_MODULE_MARK)
+        for line in stdout.splitlines()
+        if line.startswith(_MODULE_MARK)
+    ]
 
 
 @pytest.fixture

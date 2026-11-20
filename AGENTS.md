@@ -115,7 +115,7 @@ Agents never call the API or per-domain MCP tools directly. They go through two 
 
 ## Agent Providers
 
-Backends are pluggable (`roboco/llm/providers/`, `ProviderRegistry` keyed by `ModelProvider`): Claude Code (default), Grok, Gemini, Codex, Kimi, OpenRouter, Nebius, Hummin. Routing resolves `(provider, model)` per agent at spawn with precedence `AGENT_SLUG > ROLE:complexity > ROLE > GLOBAL`, and a capability floor upgrades any below-floor Anthropic assignment to Sonnet because Haiku cannot emit the structured envelopes. Per-runtime auth and tool-scoping gotchas: `.claude/rules/agent-providers.md`.
+Backends are pluggable (`roboco/llm/providers/`, `ProviderRegistry` keyed by `ModelProvider`): Claude Code (default), Grok, Gemini, Codex, Kimi (disabled by default), Nebius (off by default; temporary key-based exception). Routing resolves `(provider, model)` per agent at spawn with precedence `AGENT_SLUG > ROLE:complexity > ROLE > GLOBAL`, and a capability floor upgrades any below-floor Anthropic assignment to Sonnet because Haiku cannot emit the structured envelopes. Per-runtime auth and tool-scoping gotchas: `.claude/rules/agent-providers.md`.
 
 ## Feature Flags
 

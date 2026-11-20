@@ -979,124 +979,6 @@ def _register_learning_tools(mcp: MCPServer, client: ApiClient) -> None:
         return response
 
 
-def _register_index_management_tools(mcp: MCPServer, client: ApiClient) -> None:
-    """Register index management tools for administrative operations."""
-
-    @mcp.tool()
-    async def roboco_clear_index(index_type: str) -> dict[str, Any]:
-        """
-        Clear all documents from a specific index.
-
-        Use with caution - this permanently deletes indexed content.
-        Useful for recovering from corrupted indexes or starting fresh.
-
-        PERMISSION: Requires CLEAR_INDEX permission.
-
-        Args:
-            index_type: One of: code, documentation, conversations, journals,
-                        errors, standards, decisions, reviews, learnings
-
-        Returns:
-            Confirmation of cleared index
-        """
-        valid_types = {
-            "code",
-            "documentation",
-            "conversations",
-            "journals",
-            "errors",
-            "standards",
-            "decisions",
-            "reviews",
-            "learnings",
-        }
-        if index_type not in valid_types:
-            return format_error_response(
-                "INVALID_INDEX_TYPE",
-                f"Invalid index type. Must be one of: {', '.join(sorted(valid_types))}",
-            )
-
-        resp = await client.delete(f"/optimal/kb/{index_type}")
-        if not resp.ok:
-            if resp.status_code == http_status.HTTP_403_FORBIDDEN:
-                return format_error_response(
-                    "NOT_AUTHORIZED",
-                    "You don't have permission to clear indexes",
-                )
-            return format_error_response(
-                "CLEAR_FAILED",
-                "Failed to clear index",
-                {"api_error": resp.text},
-            )
-
-        return {"status": "success", "cleared": index_type}
-
-    @mcp.tool()
-    async def roboco_reindex_all(force: bool = False) -> dict[str, Any]:
-        """
-        Trigger re-indexing of code and documentation.
-
-        Re-scans the codebase and docs directories to update indexes.
-        Useful when files have been added/changed outside of normal workflow.
-
-        PERMISSION: Requires INDEX_CODE permission.
-
-        Args:
-            force: If True, reindex even if indexes aren't empty
-
-        Returns:
-            Count of indexed code files and documentation files
-        """
-        resp = await client.post(
-            "/optimal/kb/reindex",
-            params={"force": str(force).lower()},
-        )
-        if not resp.ok:
-            if resp.status_code == http_status.HTTP_403_FORBIDDEN:
-                return format_error_response(
-                    "NOT_AUTHORIZED",
-                    "You don't have permission to trigger reindexing",
-                )
-            return format_error_response(
-                "REINDEX_FAILED",
-                "Failed to trigger reindexing",
-                {"api_error": resp.text},
-            )
-
-        result = resp.json()
-        return {
-            "status": "success",
-            "code_files_indexed": result.get("code", 0),
-            "docs_files_indexed": result.get("docs", 0),
-        }
-
-    @mcp.tool()
-    async def roboco_index_status() -> dict[str, Any]:
-        """
-        Get detailed status of all indexes.
-
-        Shows document counts and last update times for each index type.
-        Useful for monitoring and debugging indexing issues.
-
-        Returns:
-            Status information for each index including document counts
-        """
-        resp = await client.get("/optimal/stats")
-        if not resp.ok:
-            return format_error_response(
-                "STATS_FAILED",
-                "Failed to get index status",
-                {"api_error": resp.text},
-            )
-
-        result = resp.json()
-        return {
-            "status": "success",
-            "initialized": result.get("initialized", False),
-            "indexes": result.get("indexes", {}),
-        }
-
-
 def _register_proactive_tools(mcp: MCPServer, client: ApiClient) -> None:
     """Register proactive context tools."""
 
@@ -1173,8 +1055,7 @@ def _register_proactive_tools(mcp: MCPServer, client: ApiClient) -> None:
 # Every registered schema rides in each turn's context, so a role only carries
 # the groups its duties use. A group absent from this map registers for every
 # role; an unknown/unset role registers everything (fail-open to the previous
-# behaviour) — except index management, which is destructive operator tooling
-# (clear/reindex) and registers only under ROBOCO_ALLOW_FULL_TOOLSET.
+# behaviour).
 _GROUP_ROLES: dict[str, frozenset[str]] = {
     "error": frozenset({"developer", "qa"}),
     "standards": frozenset({"developer", "qa", "documenter", "pr_reviewer"}),
@@ -1200,7 +1081,6 @@ def create_optimal_mcp_server(agent_id: str) -> MCPServer:
     mcp = MCPServer(f"roboco-optimal-{agent_id}")
     client = ApiClient(agent_id)
     role = os.environ.get("ROBOCO_AGENT_ROLE", "")
-    full_toolset = bool(os.environ.get("ROBOCO_ALLOW_FULL_TOOLSET"))
 
     # Universal groups — every role reasons with search/mentor/learnings.
     _register_search_tools(mcp, client)
@@ -1210,18 +1090,14 @@ def create_optimal_mcp_server(agent_id: str) -> MCPServer:
     _register_proactive_tools(mcp, client)
 
     # Duty-scoped groups.
-    if full_toolset or _role_wants("indexing", role):
+    if _role_wants("indexing", role):
         _register_indexing_tools(mcp, client)
-    if full_toolset or _role_wants("error", role):
+    if _role_wants("error", role):
         _register_error_tools(mcp, client)
-    if full_toolset or _role_wants("decision", role):
+    if _role_wants("decision", role):
         _register_decision_tools(mcp, client)
-    if full_toolset or _role_wants("standards", role):
+    if _role_wants("standards", role):
         _register_standards_tools(mcp, client)
-
-    # Destructive index management (clear/reindex) — dev/test escape hatch only.
-    if full_toolset:
-        _register_index_management_tools(mcp, client)
 
     return mcp
 

@@ -7,18 +7,15 @@ One" pattern (Jev): state in, typed answers with probabilities out, and the
 calling code accepts, rejects, or escalates on a confidence threshold -
 "AI multiple choice, not AI essay writing."
 
-Three tiers behind one wire format, resolved per call (``resolver.py``):
+Two tiers behind one wire format, resolved per call (``resolver.py``):
 
 1. Clef (BUILT-IN sweet-spot default): the self-hosted ``roboco-decisions``
    sidecar's 27B llama.cpp backend (``settings.decisions_base_url``), no
    key, no spend, no egress.
 2. Laya (CHEAP self-hosted option): the same sidecar's 421M backend,
    serving when Clef is disabled or unhealthy.
-3. OpenRouter (OPT-IN, the expensive option): the Decisions API with
-   ``typesafe/jev-1.13``, serving only when the CEO opts in AND the AI
-   Provider screen has a key.
 
-Tier 3 is the floor: master flag off, or no healthy tier, means every call
+No verdict is the floor: master flag off, or no healthy tier, means every call
 site does exactly what it did before this package existed. Decisions can
 only add behavior, never subtract; nothing materializes on a verdict alone.
 

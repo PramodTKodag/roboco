@@ -83,40 +83,6 @@ class SetGrokKeyRequest(BaseModel):
     api_key: str = Field(default="")
 
 
-# =============================================================================
-# OPENROUTER API KEY
-# =============================================================================
-
-
-class OpenRouterKeyStatus(BaseModel):
-    """Whether the OpenRouter provider has a stored key."""
-
-    has_key: bool
-    enabled: bool
-
-
-class DecisionsStatus(BaseModel):
-    """Decisions-service tier status for the AI Providers warning banner.
-
-    Carries only booleans: the OpenRouter key itself never leaves the server.
-    """
-
-    decisions_enabled: bool
-    openrouter_opted_in: bool
-    openrouter_key_present: bool
-
-
-class SetOpenRouterKeyRequest(BaseModel):
-    """Set or clear the OpenRouter API key.
-
-    Pass an empty string to clear. Pass a non-empty string to save
-    (encrypted with Fernet) and mark the OpenRouter provider enabled.
-    Used against https://openrouter.ai/api/v1.
-    """
-
-    api_key: str = Field(default="")
-
-
 class ZaiKeyStatus(BaseModel):
     """Whether the Z.ai provider has a stored key."""
 
@@ -135,35 +101,14 @@ class SetZaiKeyRequest(BaseModel):
     api_key: str = Field(default="")
 
 
-class HumminKeyStatus(BaseModel):
-    """Whether the hummin provider has a stored key."""
+class ProviderModelEntry(BaseModel):
+    """One model available on a provider's live catalog.
 
-    has_key: bool
-    enabled: bool
-
-
-class SetHumminKeyRequest(BaseModel):
-    """Set or clear the hummin provider's Z.ai key (the GLM Coding Plan
-    credential, injected as ZAI_API_KEY at spawn).
-
-    Pass an empty string to clear. Pass a non-empty string to save
-    (encrypted with Fernet) and mark the hummin provider enabled.
-    """
-
-    api_key: str = Field(default="")
-
-
-class OpenRouterModelEntry(BaseModel):
-    """One model available on OpenRouter's live catalog.
-
-    ``id`` is the OpenRouter model slug (e.g. ``deepseek/deepseek-chat``)
-    used as the model_name in routing assignments. ``name`` is the display
-    name from OpenRouter. ``context_length`` is the max context in tokens.
-    ``prompt_price`` / ``completion_price`` are the per-token USD rates as
-    floats (converted from OpenRouter's string rates) for the UI's pricing
-    display. Shared with the Nebius model search (the OpenAI-compatible
-    Token Factory list carries the same fields, mostly absent, so the same
-    nullable shape serves both).
+    ``id`` is the model slug used as the model_name in routing assignments.
+    ``name`` is the display name. ``context_length`` is the max context in
+    tokens. ``prompt_price`` / ``completion_price`` are the per-token USD
+    rates as floats for the UI's pricing display; the OpenAI-compatible list
+    carries these mostly absent, so the shape is nullable.
     """
 
     id: str
@@ -306,20 +251,9 @@ class ApplyModeRequest(BaseModel):
       set GLOBAL default to `default_model` (default kimi-code/k3). No key
       check — subscription-CLI auth (shared, symlinked-in ~/.kimi-code),
       same shape as codex/gemini.
-    - mode="openrouter": clear every assignment; force-enable the
-      OPENROUTER provider; set GLOBAL default to `default_model` (default
-      deepseek/deepseek-chat). The model id is stored directly via
-      provider_type_override since OpenRouter models are not in the static
-      catalog. Requires the OpenRouter API key to be set first (PUT
-      /providers/openrouter-key).
     - mode="zai": clear every assignment; force-enable the ZAI provider;
       set GLOBAL default to `default_model` (default glm-5.3-flash).
       Requires the Z.ai key (PUT /providers/zai-key).
-    - mode="hummin": clear every assignment; force-enable the HUMMIN
-      provider; set GLOBAL default to `default_model` (default
-      settings.hummin_cli_model, a GLM id). No key check at mode-apply time
-      (the openrouter precedent — the spawn-time preflight is the gate:
-      a missing ZAI_API_KEY exits the container 78 and parks the provider).
     - mode="mix": clear existing per-agent pins; upsert the `per_agent`
       map verbatim. Role + GLOBAL rows are left untouched so the user can
       layer with an existing partial setup. Self-hosted model names in
@@ -340,10 +274,8 @@ class ApplyModeRequest(BaseModel):
         "codex",
         "gemini",
         "kimi",
-        "openrouter",
         "nebius",
         "zai",
-        "hummin",
         "ollama",
         "mix",
         "self_hosted",
@@ -362,10 +294,8 @@ class ModeResponse(BaseModel):
         "codex",
         "gemini",
         "kimi",
-        "openrouter",
         "nebius",
         "zai",
-        "hummin",
         "ollama",
         "mix",
         "self_hosted",
@@ -440,10 +370,8 @@ class RoutingPresetApplyResponse(BaseModel):
         "codex",
         "gemini",
         "kimi",
-        "openrouter",
         "nebius",
         "zai",
-        "hummin",
         "ollama",
         "mix",
         "self_hosted",

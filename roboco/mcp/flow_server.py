@@ -1194,6 +1194,7 @@ _TOOLS: dict[str, Any] = {
 
 # IntentSpec verb names → MCP public tool names. The IntentSpec layer uses
 
+
 def _load_manifest_flow_tools() -> list[str] | None:
     """Read the spawn manifest and return its ``flow_tools`` list.
 
@@ -1230,10 +1231,7 @@ def _register_tools() -> list[str]:
     The manifest is the role-authoritative tool list. Falling back to
     all-verbs registration (the previous behaviour) caused PMs to see
     developer/QA verbs and call them at wrong URLs (404s). We now refuse
-    to start without the manifest — unless ``ROBOCO_ALLOW_FULL_TOOLSET`` is
-    set, a dev/test escape hatch that registers the full tool set instead of
-    raising so the server modules import without a hand-written manifest
-    (#162). Default-off so production behaviour is unchanged.
+    to start without the manifest.
 
     Returns the list of verb names actually registered.
     """
@@ -1242,27 +1240,16 @@ def _register_tools() -> list[str]:
         manifest_path = os.environ.get(
             "ROBOCO_TOOL_MANIFEST_PATH", "/app/tool-manifest.json"
         )
-        if os.environ.get("ROBOCO_ALLOW_FULL_TOOLSET"):
-            log.warning(
-                "flow_server: manifest missing — ROBOCO_ALLOW_FULL_TOOLSET set,"
-                " registering the full tool set (dev/test only)",
-                role=AGENT_ROLE,
-                path=manifest_path,
-            )
-            allowed = list(_TOOLS.keys())
-        else:
-            msg = (
-                f"flow_server: manifest unavailable at {manifest_path};"
-                f" refusing to register all-verbs fallback (would let"
-                f" {AGENT_ROLE!r} call off-role verbs at wrong URLs)."
-                f" Check that the orchestrator wrote the manifest to its"
-                f" /app/manifests/ directory and that the agent container"
-                f" has the bind-mount."
-            )
-            log.error(
-                "flow_server: manifest missing", role=AGENT_ROLE, path=manifest_path
-            )
-            raise RuntimeError(msg)
+        msg = (
+            f"flow_server: manifest unavailable at {manifest_path};"
+            f" refusing to register all-verbs fallback (would let"
+            f" {AGENT_ROLE!r} call off-role verbs at wrong URLs)."
+            f" Check that the orchestrator wrote the manifest to its"
+            f" /app/manifests/ directory and that the agent container"
+            f" has the bind-mount."
+        )
+        log.error("flow_server: manifest missing", role=AGENT_ROLE, path=manifest_path)
+        raise RuntimeError(msg)
     public = [public_flow_verb(verb) for verb in allowed]
     unknown = [verb for verb in public if verb not in _TOOLS]
     if unknown:

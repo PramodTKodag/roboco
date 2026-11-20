@@ -2,10 +2,10 @@
 # Decisions sidecar (the self-hosted tier of the Decisions service) - CPU-only
 # =============================================================================
 # Runs TWO llama.cpp decision servers behind the FastAPI proxy in
-# docker/decisions/server.py, mirroring the OpenRouter Decisions wire shape
+# docker/decisions/server.py, serving the Decisions wire shape
 # at POST /api/alpha/decisions so roboco/services/decisions/client.py speaks
-# ONE implementation against the self-hosted tiers and the OpenRouter
-# fallback tier (docs/internal/decisions-spec.md sections 8 Stage 0.5 and 10).
+# ONE implementation against the self-hosted tiers
+# (docs/internal/decisions-spec.md sections 8 Stage 0.5 and 10).
 # Decision-model support is llama.cpp PR #29818 (/v1/systemone, first in
 # b11361), but the clef ARCHITECTURE is PR #29831, first in b11371: b11361
 # dies with "unknown model architecture: 'clef'". The pin below is b11371.

@@ -401,50 +401,13 @@ _OVERLOAD_MARKERS_BY_PROVIDER: dict[str, tuple[str, ...]] = {
 # The intake (prompter) agent: a single seeded, board-adjacent interviewer.
 # Unlike delivery agents it is never dispatched and runs ONE persistent
 # container at a time (single CEO → one live chat). See the INTAKE section
-# below and roboco/agent_sdk/intake_main.py.
+# below.
 INTAKE_AGENT_ID = "intake-1"
 
 # The Secretary agent: a single seeded, persistent chief-of-staff container the
 # CEO chats with (like intake), but with gated CEO authority. One container at a
-# time. Seeded in identity.AGENTS; see roboco/agent_sdk/secretary_main.py.
+# time. Seeded in identity.AGENTS.
 SECRETARY_AGENT_ID = "secretary-1"
-
-# Codex (OPENAI), Gemini (GEMINI), and Kimi (KIMI) are V1 delivery-roles-only
-# (see roboco.llm.providers.codex / .gemini / .kimi module docstrings) —
-# none supports the persistent interactive Intake/Secretary session (no
-# CLI-flag equivalent to grok's --disallowed-tools/deny, no
-# interactive-session driver image).
-# Unlike GROK (which has its own GROK_PROMPTER_IMAGE / GROK_SECRETARY_IMAGE),
-# routing any of these to Intake/Secretary would fall through to the plain
-# Claude SDK-driver image with a mismatched provider env instead of refusing —
-# so all three spawn paths reject it explicitly instead of silently misbehaving.
-# Mirrors roboco.services.llm.INTERACTIVE_UNSUPPORTED_PROVIDERS (kept as a
-# literal here to avoid a runtime import cycle; parity is pinned by a test).
-# The resolver exempts interactive agents from GLOBAL/ROLE rows on these
-# providers (a fleet-wide mode switch keeps the chats on Anthropic); this
-# guard is the backstop for an EXPLICIT AGENT_SLUG pin, which is refused
-# loudly rather than silently overridden.
-# RETIRED to empty (2026-09-17): every provider has an interactive path now
-# (see roboco/services/llm.py INTERACTIVE_UNSUPPORTED_PROVIDERS). The guard
-# below stays wired as the backstop for future delivery-only providers.
-_INTERACTIVE_UNSUPPORTED_PROVIDERS: tuple[ModelProvider, ...] = ()
-
-
-def _reject_interactive_unsupported_provider(
-    agent_id: str, provider_type: ModelProvider
-) -> None:
-    """Refuse spawning the interactive Intake/Secretary agent on a delivery-
-    roles-only provider. Raise BEFORE any image resolution/container mutation
-    so the guarded wrapper's generic ``except Exception`` surfaces this
-    cleanly on the live relay instead of the spawn silently misrouting."""
-    if provider_type in _INTERACTIVE_UNSUPPORTED_PROVIDERS:
-        raise RuntimeError(
-            f"{provider_type.value} is a delivery-roles-only provider (V1) — "
-            f"it cannot power the interactive {agent_id} session. Route "
-            f"{agent_id} to Anthropic, Grok, Ollama, or Self-Hosted instead "
-            "(Mix mode's per-agent picker)."
-        )
-
 
 # Role -> Image mapping
 # Specialized images extend the base with role-specific tools
@@ -487,10 +450,6 @@ AGENT_IMAGES: dict[str, str] = {
     # terraform lints, docker/agent-devops.Dockerfile); wiring spans the
     # compose services, the registry compose, and the release build list.
     "devops-1": "roboco-agent-devops",
-    # Intake — persistent Agent-SDK driver, not a one-shot `claude -p`.
-    INTAKE_AGENT_ID: "roboco-agent-prompter",
-    # Secretary — persistent Agent-SDK driver with gated CEO authority.
-    SECRETARY_AGENT_ID: "roboco-agent-secretary",
 }
 
 
@@ -530,16 +489,6 @@ GROK_USAGE_DATA_DIR = os.environ.get("ROBOCO_GROK_USAGE_DIR", "/data/grok-usage"
 # Same shape for CODEX agents (roboco.llm.providers.codex_cli_usage writes
 # usage.json here; the finalizer reads it back — see _codex_usage_json).
 CODEX_USAGE_DATA_DIR = os.environ.get("ROBOCO_CODEX_USAGE_DIR", "/data/codex-usage")
-
-# Interactive Grok images (grok-CLI conversation drivers) — selected for the
-# intake / secretary roles when their route resolves to GROK, instead of the
-# Claude prompter/secretary images. Their dockerfiles build FROM roboco-agent-grok.
-GROK_PROMPTER_IMAGE = "roboco-agent-grok-prompter"
-GROK_SECRETARY_IMAGE = "roboco-agent-grok-secretary"
-_GROK_INTERACTIVE_DOCKERFILES = {
-    GROK_PROMPTER_IMAGE: "agent-grok-prompter.Dockerfile",
-    GROK_SECRETARY_IMAGE: "agent-grok-secretary.Dockerfile",
-}
 
 # A one-shot Grok container exits with this code (EX_TEMPFAIL) when the run hit
 # an xAI 429 (grok-cli-agent-entrypoint.sh detects it). The orchestrator parks the
@@ -634,48 +583,11 @@ KIMI_USAGE_DATA_DIR = os.environ.get("ROBOCO_KIMI_USAGE_DIR", "/data/kimi-usage"
 _KIMI_RATE_LIMIT_EXIT_CODE = 75
 _KIMI_AUTH_EXIT_CODE = 78
 
-# In-orchestrator path where each OPENROUTER agent's usage capture is visible
-# — the openrouter analogue of KIMI_USAGE_DATA_DIR (see there for the mount
-# shape). OpenRouter usage is captured from the opencode --format json stream
-# (see roboco.llm.providers.openrouter_cli_usage).
-OPENROUTER_USAGE_DATA_DIR = os.environ.get(
-    "ROBOCO_OPENROUTER_USAGE_DIR", "/data/openrouter-usage"
-)
-
-# A one-shot OpenRouter container exits with these SAME codes for the SAME
-# reasons (its entrypoint mirrors the kimi/codex/grok exit-code convention -
-# see docker/scripts/entrypoints/openrouter-agent-entrypoint.sh): 75 (EX_TEMPFAIL) on a
-# detected OpenRouter rate-limit/quota error, 78 (EX_CONFIG) when the
-# openrouter_cli_config --check auth preflight finds OPENROUTER_API_KEY
-# missing (the Ollama shape - a static key, no expiry read). Scoped by
-# provider_type (ModelProvider.OPENROUTER), never by exit code alone.
-_OPENROUTER_RATE_LIMIT_EXIT_CODE = 75
-_OPENROUTER_AUTH_EXIT_CODE = 78
-
 # In-orchestrator path where each NEBIUS agent's usage capture is visible
-# - the nebius analogue of OPENROUTER_USAGE_DATA_DIR (see there for the mount
+# - the analogue of KIMI_USAGE_DATA_DIR (see there for the mount
 # shape). Nebius usage is captured from the opencode --format json stream
 # (see roboco.llm.providers.nebius_cli_usage).
 NEBIUS_USAGE_DATA_DIR = os.environ.get("ROBOCO_NEBIUS_USAGE_DIR", "/data/nebius-usage")
-
-# In-orchestrator path where each HUMMIN agent's usage capture is visible
-# - the hummin analogue of KIMI_USAGE_DATA_DIR (see there for the mount
-# shape). Hummin usage is scraped from the tee'd `--mode json` run log
-# (see roboco.llm.providers.hummin_cli_usage).
-HUMMIN_USAGE_DATA_DIR = os.environ.get("ROBOCO_HUMMIN_USAGE_DIR", "/data/hummin-usage")
-
-# A one-shot hummin container exits with these SAME codes for the SAME
-# reasons (its entrypoint mirrors the kimi/codex/grok exit-code convention -
-# see docker/scripts/entrypoints/hummin-cli-agent-entrypoint.sh): 75 (EX_TEMPFAIL) on a
-# detected Z.ai rate-limit/quota error, 78 (EX_CONFIG) when the auth
-# preflight (hummin auth check --provider zai --json) finds the ZAI_API_KEY
-# missing/invalid. NOTE the hummin-specific trap: --mode json exits 0 even
-# when the assistant errored - the entrypoint branches on the sniff result,
-# never the raw exit code alone (see hummin_cli_sniff). Numeric reuse of the
-# shared 75/78 codes is fine - the checks are scoped by provider_type
-# (ModelProvider.HUMMIN), never by exit code alone.
-_HUMMIN_RATE_LIMIT_EXIT_CODE = 75
-_HUMMIN_AUTH_EXIT_CODE = 78
 
 # A one-shot Nebius container exits with these SAME codes for the SAME
 # reasons (its entrypoint mirrors the kimi/codex/grok exit-code convention -
@@ -1024,20 +936,6 @@ class AgentReadinessError(Exception):
     """
 
 
-class _SpawnAbortedDuringShutdown(Exception):
-    """Raised when a non-blocking intake/secretary spawn completes ``docker run``
-    after the orchestrator began shutting down.
-
-    The raiser has already removed the just-started container (so it isn't
-    orphaned); the guarded wrapper catches this BEFORE its generic
-    ``except Exception`` and closes the live relay silently — shutdown is not a
-    user-facing failure, so no error is pushed to the SSE stream. The F070
-    ``stop()`` drain awaits the bg spawn coroutine, so this surfaces cleanly
-    instead of the registration landing a live container into a registry that
-    ``stop()`` has already finished iterating.
-    """
-
-
 def _is_held_ceo_source(task: dict[str, Any]) -> bool:
     """True for sources the PM dispatcher must never route as delivery work.
 
@@ -1360,6 +1258,9 @@ class AgentOrchestrator(
     # pre-ledger behaviour.
     _uptime: "UptimeLedger | None" = None
     _uptime_loaded_at: datetime | None = None
+    # Supervisor for delivery agents running as model runs. None until first
+    # use (and for a bare __new__ test double), meaning no agent is supervised.
+    _run_supervisor: RunSupervisor | None = None
 
     def __new__(cls, *_args: Any, **_kwargs: Any) -> "AgentOrchestrator":
         """Allocate the instance and pre-initialize lazy dispatcher state.
@@ -1432,9 +1333,9 @@ class AgentOrchestrator(
         # the built-in _spawn_container path unchanged. Built lazily.
         self._provider_registry: ProviderRegistry | None = None
         # Delivery agents on the Anthropic subscription run as bounded model
-        # runs on the trusted service, not containers. Built lazily and fails
-        # closed when the service is not configured.
-        self._run_supervisor: RunSupervisor | None = None
+        # runs on the trusted service, not containers. The supervisor is built
+        # lazily (class-level default None) and fails closed when the service
+        # is not configured.
         self._chat_runner: ChatTurnRunner | None = None
         # Tracks which providers have already received a CEO notification
         # during the current rate-limit episode.  Cleared when the probe
@@ -1626,32 +1527,13 @@ class AgentOrchestrator(
             settings.kimi_rate_limit_retry_after_seconds
         )
         self._kimi_auth_retry_after_s: float = settings.kimi_auth_retry_after_seconds
-        # Configurable retry_after base for OPENROUTER parks (kimi's tunable
-        # pattern). getattr-with-default keeps this branch shippable ahead of
-        # the 711b4bd7 config PR that lands the Settings fields themselves;
-        # once both merge the attribute is always present and the fallback
-        # default is dead.
-        self._openrouter_rate_limit_retry_after_s: float = getattr(
-            settings, "openrouter_rate_limit_retry_after_seconds", 60.0
-        )
-        self._openrouter_auth_retry_after_s: float = getattr(
-            settings, "openrouter_auth_retry_after_seconds", 60.0
-        )
-        # Configurable retry_after base for NEBIUS parks (the openrouter
-        # tunable pattern; the Settings fields land with the provider).
+        # Configurable retry_after base for NEBIUS parks (kimi's
+        # tunable pattern).
         self._nebius_rate_limit_retry_after_s: float = (
             settings.nebius_rate_limit_retry_after_seconds
         )
         self._nebius_auth_retry_after_s: float = (
             settings.nebius_auth_retry_after_seconds
-        )
-        # Configurable retry_after base for HUMMIN parks (kimi's tunable
-        # pattern; the Settings fields land with the provider).
-        self._hummin_rate_limit_retry_after_s: float = (
-            settings.hummin_rate_limit_retry_after_seconds
-        )
-        self._hummin_auth_retry_after_s: float = (
-            settings.hummin_auth_retry_after_seconds
         )
 
     def _init_engine_loop_task_slots(self) -> None:
@@ -1979,26 +1861,6 @@ class AgentOrchestrator(
     }
 
     _NOTIFICATION_COOLDOWN_PRUNE_AT = 512
-
-    # =========================================================================
-    # INTAKE (PROMPTER) LIVE SESSION
-    #
-    # The intake agent is not task-driven and is never dispatched. It is a
-    # persistent Claude-Agent-SDK driver the CEO chats with live (the container
-    # entrypoint is roboco.agent_sdk.intake_main). One fixed container —
-    # `intake-1`, the seeded board-adjacent interviewer — serves one live
-    # session at a time (single CEO; one-session-per-CEO).
-    #
-    # This spawn is a DELIBERATELY separate path from spawn_agent: no task, no
-    # readiness gate, no `claude -p` CLI args (the image ENTRYPOINT is the
-    # driver), no settings.json/hook mount (the driver owns the receiver on
-    # port 9000, not the inbox sidecar), and no MCP/gateway surface (the live
-    # agent reads code with Read/Grep/Glob and talks only to the human).
-    # =========================================================================
-
-    # ------------------------------------------------------------------ #
-    # Secretary live session (mirrors intake; no scope clone; auth token)
-    # ------------------------------------------------------------------ #
 
     # =========================================================================
     # AGENT STOPPING

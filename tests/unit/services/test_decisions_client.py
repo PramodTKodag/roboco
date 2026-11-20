@@ -22,10 +22,6 @@ from roboco.services.decisions.client import (
 from roboco.services.decisions.schemas import DecisionResult, NoulQuestion
 
 
-def _note_spend_noop(tier: str, cost: float | None) -> None:
-    return None
-
-
 _LAYA = DecisionsEndpoint(
     tier="laya",
     base_url="http://roboco-decisions:8100",
@@ -181,29 +177,6 @@ async def test_success_resets_circuit() -> None:
     await client.decide(_LAYA, {}, {}, "s")
     assert calls["n"] == 3  # never opened: 2 failures < threshold
     await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_bearer_key_sent_for_openrouter_tier() -> None:
-    captured = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured["auth"] = request.headers.get("Authorization")
-        return httpx.Response(200, json=_OK_PAYLOAD)
-
-    endpoint = DecisionsEndpoint(
-        tier="openrouter",
-        base_url="https://openrouter.ai",
-        model="typesafe/jev-1.13",
-        timeout_s=2.0,
-        api_key="sk-or-test",
-    )
-    client = _client_with(handler)
-    result = await client.decide(endpoint, {}, {}, "s")
-    await client.aclose()
-    assert captured["auth"] == "Bearer sk-or-test"
-    assert result is not None
-    assert result.tier == "openrouter"
 
 
 @pytest.mark.asyncio
@@ -364,23 +337,6 @@ class TestLayaBudget:
             len(q["instructions"]) == 300 for q in captured["questions"].values()
         )
 
-    @pytest.mark.asyncio
-    async def test_openrouter_tier_keeps_per_key_caps_only(self) -> None:
-        # The budget pass is self-hosted-only: the OpenRouter fallback keeps
-        # its per-key billing caps (here 4k for task_description), far over
-        # the laya budget, intact for the bigger fallback model.
-        captured = {}
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            captured["state"] = json.loads(request.read())["state"]
-            return httpx.Response(200, json=_OK_PAYLOAD)
-
-        client = _client_with(handler)
-        await client.decide(_OPENROUTER, {"task_description": "z" * 5_000}, {}, "s")
-        await client.aclose()
-        sent = cast("str", captured["state"]["task_description"])
-        assert len(sent) <= 4_100
-
 
 class TestClefBudget:
     """The clef tier runs the same deterministic budget pass with the
@@ -476,22 +432,6 @@ class TestCorpusStamping:
         )
 
     @pytest.mark.asyncio
-    async def test_openrouter_stamp_keeps_per_key_caps_only(self) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json=_OK_PAYLOAD)
-
-        client = _client_with(handler)
-        result = await client.decide(
-            _OPENROUTER, {"task_description": "z" * 5_000}, {}, "s"
-        )
-        await client.aclose()
-        assert result is not None
-        assert result.state is not None
-        sent = cast("str", result.state["task_description"])
-        assert len(sent) <= 4_100
-        assert len(sent) > _LAYA_STATE_BUDGET_CHARS
-
-    @pytest.mark.asyncio
     async def test_failed_call_stamps_nothing(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(500, text="boom")
@@ -500,91 +440,3 @@ class TestCorpusStamping:
         result = await client.decide(_LAYA, {"repo": "roboco"}, {}, "s")
         await client.aclose()
         assert result is None
-
-
-_OPENROUTER = DecisionsEndpoint(
-    tier="openrouter",
-    base_url="https://openrouter.ai",
-    model="typesafe/jev-1.13",
-    timeout_s=2.0,
-    api_key="sk-or-test",
-)
-
-
-@pytest.mark.asyncio
-async def test_http_402_is_observed_by_spend_guard(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A 402 (credits exhausted) counts into the spend guard while the
-    fail-open behavior stays exactly the same (spec 3.1)."""
-    recorded = []
-
-    def note_402(tier: str) -> None:
-        recorded.append(tier)
-
-    monkeypatch.setattr("roboco.services.decisions.client.record_402", note_402)
-    monkeypatch.setattr(
-        "roboco.services.decisions.client.record_spend", _note_spend_noop
-    )
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            402, json={"error": {"code": 402, "message": "insufficient credits"}}
-        )
-
-    client = _client_with(handler)
-    result = await client.decide(_OPENROUTER, {}, {}, "s")
-    await client.aclose()
-    assert result is None  # fail-open, unchanged
-    assert recorded == ["openrouter"]
-
-
-@pytest.mark.asyncio
-async def test_non_402_errors_do_not_touch_spend_guard(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    recorded = []
-
-    def note_402(tier: str) -> None:
-        recorded.append(tier)
-
-    monkeypatch.setattr("roboco.services.decisions.client.record_402", note_402)
-    monkeypatch.setattr(
-        "roboco.services.decisions.client.record_spend", _note_spend_noop
-    )
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(429, json={"error": {"code": 429, "message": "rate"}})
-
-    client = _client_with(handler)
-    result = await client.decide(_OPENROUTER, {}, {}, "s")
-    await client.aclose()
-    assert result is None
-    assert recorded == []
-
-
-@pytest.mark.asyncio
-async def test_successful_call_records_spend(monkeypatch: pytest.MonkeyPatch) -> None:
-    recorded = []
-
-    def note_spend(tier: str, cost: float | None) -> None:
-        recorded.append((tier, cost))
-
-    monkeypatch.setattr(
-        "roboco.services.decisions.client.record_402", lambda tier: None
-    )
-    monkeypatch.setattr("roboco.services.decisions.client.record_spend", note_spend)
-
-    payload = {
-        **_OK_PAYLOAD,
-        "usage": {"input_tokens": 100, "output_tokens": 5, "cost": 0.021},
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=payload)
-
-    client = _client_with(handler)
-    result = await client.decide(_LAYA, {}, {}, "s")
-    await client.aclose()
-    assert result is not None
-    assert recorded == [("laya", 0.021)]

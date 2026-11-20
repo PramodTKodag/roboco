@@ -6,7 +6,7 @@ The AI Routing card (`panel/src/components/settings/ai-routing-card.tsx`) and th
 
 The Nebius API contract lives in `panel/src/lib/api/providers.ts`:
 
-- `NebiusModel` - one entry from `GET /providers/nebius/models?q=`. The backend reuses the OpenRouter entry shape; pricing and context fields are nullable and typically null (Token Factory's list carries no capability metadata).
+- `NebiusModel` - one entry from `GET /providers/nebius/models?q=`. The backend returns the shared `ProviderModelEntry` shape; pricing and context fields are nullable and typically null (Token Factory's list carries no capability metadata).
 - `NebiusKeyStatus` - `{ has_key: boolean, enabled: boolean }` from `GET/PUT /providers/nebius-key`.
 - `providersApi.getNebiusKey` / `setNebiusKey` / `searchNebiusModels`.
 
@@ -20,7 +20,7 @@ The Nebius API contract lives in `panel/src/lib/api/providers.ts`:
 - **Mode button + flip**: the Nebius `ModeButton` is disabled until the key is set. Confirming the flip replaces role/global assignments while keeping per-agent pins and complexity overrides; the payload passes `mode: "nebius"` plus the picked model as `default_model` only when one is selected. The mode note states the delivery-roles-only scope (intake/secretary stay on Anthropic) and that agents run on the opencode CLI against Nebius Token Factory.
 - **Model picker states** (rendered only in `nebius` mode): with no key the input is disabled behind an amber "Save your Nebius API key above…" notice; a failing search renders the status-specific copy below; zero results render `No models found for "…"`. There is no preload - the query fires only for a non-empty debounced search while the key is set.
 
-The picker surfaces the cause of a failure through `nebiusSearchErrorMessage` (mirroring `openRouterSearchErrorMessage`):
+The picker surfaces the cause of a failure through `nebiusSearchErrorMessage`:
 
 | Failure | Copy |
 | --- | --- |
@@ -30,7 +30,7 @@ The picker surfaces the cause of a failure through `nebiusSearchErrorMessage` (m
 | `ECONNABORTED` / `ETIMEDOUT` | "Nebius search timed out - try again in a moment." |
 | Anything else | "Nebius API is unavailable - try again in a moment." |
 
-Pricing rendering reuses `formatPricePerMillion` with the same null-safe rules as the OpenRouter picker; on Token Factory most models have no list price, so "-" is the common rendering, and a null `context_length` omits the context line.
+Pricing rendering reuses `formatPricePerMillion` with null-safe rules; on Token Factory most models have no list price, so "-" is the common rendering, and a null `context_length` omits the context line.
 
 ## Mix mode / per-agent pins
 
