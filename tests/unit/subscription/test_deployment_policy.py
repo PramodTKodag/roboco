@@ -7,6 +7,7 @@ suites. Each one pins a boundary the deployment must never lose.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -111,7 +112,9 @@ def test_only_the_edge_publishes_a_port_and_only_on_loopback(
     services: dict[str, dict[str, Any]],
 ) -> None:
     published = {
-        name: service["ports"] for name, service in services.items() if "ports" in service
+        name: service["ports"]
+        for name, service in services.items()
+        if "ports" in service
     }
     assert set(published) == {"nginx"}
     assert all(str(port).startswith("127.0.0.1:") for port in published["nginx"])
@@ -305,3 +308,45 @@ def test_hosts_origins_and_edge_port_share_one_setting(
         assert f"127.0.0.1:{port}" in environment[name], name
     assert services["nginx"]["ports"] == [f"127.0.0.1:{port}:80"]
     assert _environment(services["nginx"])["ROBOCO_PERSONAL_PORT"] == port
+
+
+_LEGACY_CONTROLLERS = {
+    "docker-compose.yml": (
+        "orchestrator-blue",
+        "orchestrator-green",
+        "dispatcher-blue",
+        "dispatcher-green",
+    ),
+    "docker-compose.yaml": (
+        "orchestrator-blue",
+        "orchestrator-green",
+        "dispatcher-blue",
+        "dispatcher-green",
+    ),
+    "docker-compose.registry.yml": ("orchestrator", "dispatcher"),
+}
+
+
+@pytest.mark.parametrize(("filename", "names"), _LEGACY_CONTROLLERS.items())
+def test_legacy_compose_controllers_refuse_to_start(
+    filename: str, names: tuple[str, ...]
+) -> None:
+    legacy = yaml.safe_load((_REPO_ROOT / filename).read_text(encoding="utf-8"))
+    for name in names:
+        service = legacy["services"][name]
+        assert service["restart"] == "no", (filename, name)
+        script = service["entrypoint"][-1]
+        assert "make personal-up" in script, (filename, name)
+        assert script.rstrip().endswith("exit 2"), (filename, name)
+
+
+def test_the_refusal_entrypoint_exits_non_zero_with_the_message() -> None:
+    legacy = yaml.safe_load(
+        (_REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    )
+    entrypoint = legacy["services"]["orchestrator-blue"]["entrypoint"]
+    result = subprocess.run(  # noqa: S603  # nosec B603
+        entrypoint, capture_output=True, text=True, check=False, timeout=10
+    )
+    assert result.returncode == 2
+    assert "make personal-up" in result.stderr

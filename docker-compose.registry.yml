@@ -50,6 +50,18 @@
 #   - The video-renders bind mount is commented out here (video engine ships
 #     OFF); uncomment alongside ROBOCO_VIDEO_ENGINE_ENABLED=true.
 # ============================================================================
+# This fork supports only compose.personal.yml (`make personal-up`). The upstream
+# controller services below ship provider integrations, a docker socket and
+# credential mounts that the subscription-only policy forbids, so they refuse to
+# start and say why. Everything else in this file (database, cache, `ps`, `logs`,
+# `down`) keeps working so an old stack can still be inspected and stopped.
+x-personal-only: &personal-only
+  entrypoint:
+    - sh
+    - -c
+    - "echo 'refused: this fork supports only the personal deployment; run make personal-up (docs/personal/owner-setup.md)' >&2; exit 2"
+  restart: "no"
+
 x-orchestrator-env: &orchestrator-env
   # DB network isolation is LIVE in this file (postgres/redis on the
   # data-only network): suppress the legacy prod-creds gate-env
@@ -620,7 +632,7 @@ services:
   orchestrator:
     image: ${ROBOCO_REGISTRY:-ghcr.io/rennf93}/roboco-orchestrator:${ROBOCO_VERSION:-latest}
     container_name: roboco-orchestrator
-    restart: unless-stopped
+    <<: *personal-only
     # SYS_PTRACE: py-spy attaches to the running process (PID 1) to dump a
     # stack trace without a restart (`docker compose exec orchestrator
     # py-spy dump --pid 1`).
@@ -689,7 +701,7 @@ services:
   dispatcher:
     image: ${ROBOCO_REGISTRY:-ghcr.io/rennf93}/roboco-orchestrator:${ROBOCO_VERSION:-latest}
     container_name: roboco-dispatcher
-    restart: unless-stopped
+    <<: *personal-only
     networks:
       - default
       - data

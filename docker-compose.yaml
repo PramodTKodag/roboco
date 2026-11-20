@@ -1,3 +1,15 @@
+# This fork supports only compose.personal.yml (`make personal-up`). The upstream
+# controller services below ship provider integrations, a docker socket and
+# credential mounts that the subscription-only policy forbids, so they refuse to
+# start and say why. Everything else in this file (database, cache, `ps`, `logs`,
+# `down`) keeps working so an old stack can still be inspected and stopped.
+x-personal-only: &personal-only
+  entrypoint:
+    - sh
+    - -c
+    - "echo 'refused: this fork supports only the personal deployment; run make personal-up (docs/personal/owner-setup.md)' >&2; exit 2"
+  restart: "no"
+
 x-orchestrator-env: &orchestrator-env
   # Database (use container name, not localhost)
   ROBOCO_DATABASE_HOST: roboco-postgres
@@ -946,7 +958,7 @@ services:
       dockerfile: docker/orchestrator.Dockerfile
     image: roboco-orchestrator-blue
     container_name: roboco-orchestrator-blue
-    restart: unless-stopped
+    <<: *personal-only
     cap_add:
       - SYS_PTRACE
     networks:
@@ -992,7 +1004,7 @@ services:
       dockerfile: docker/orchestrator.Dockerfile
     image: roboco-orchestrator-green
     container_name: roboco-orchestrator-green
-    restart: unless-stopped
+    <<: *personal-only
     cap_add:
       - SYS_PTRACE
     networks:
@@ -1042,7 +1054,7 @@ services:
     image: roboco-orchestrator-blue
     pull_policy: never
     container_name: roboco-dispatcher-blue
-    restart: unless-stopped
+    <<: *personal-only
     networks:
       - default
       - data
@@ -1068,7 +1080,7 @@ services:
     image: roboco-orchestrator-green
     pull_policy: never
     container_name: roboco-dispatcher-green
-    restart: unless-stopped
+    <<: *personal-only
     networks:
       - default
       - data

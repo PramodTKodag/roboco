@@ -2,7 +2,7 @@
 # This fork's supported deployment is `make personal-up`. The upstream
 # pull-and-run stack ships provider integrations and credential mounts that the
 # subscription-only policy forbids, so it is refused rather than started.
-echo "refused: this fork supports only the personal deployment; run 'make personal-up' (see docs/personal/setup.md)" >&2
+echo "refused: this fork supports only the personal deployment; run 'make personal-up' (see docs/personal/owner-setup.md)" >&2
 exit 2
 
 # One-command bring-up for the registry (pull-and-run) deploy — the
