@@ -7,8 +7,13 @@ CLI environment, which gains the synthetic provider's address and a throwaway ke
 so the CLI talks to the fake provider on the internal test network. The worker
 executor records the jobs it receives instead of starting containers.
 
-stdin: JSON {"base_url", "operations", "purpose", "run_seconds"}. stdout: one JSON
-summary line. It never prints environment values.
+A verb run also starts a loopback stand-in for the controller API that records
+the method, path and header names of every verb call (never header values other
+than a match flag), so the tests can show what a verb server sends and to where.
+
+stdin: JSON {"base_url", "operations", "purpose", "run_seconds", "verbs"}.
+``verbs`` is a list of {"server", "verbs"} grants. stdout: one JSON summary line.
+It never prints environment values.
 """
 
 from __future__ import annotations
@@ -16,8 +21,11 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from roboco.runtime.subscription import policy, service
@@ -27,6 +35,9 @@ from roboco.runtime.subscription.contracts import (
     SubscriptionState,
     SubscriptionStatus,
     ToolManifest,
+    VerbCredentials,
+    VerbGrant,
+    VerbServer,
     WorkerJob,
     WorkerOperation,
     WorkerResult,
@@ -35,6 +46,55 @@ from roboco.runtime.subscription.gateway_socket import GatewayServer
 from roboco.runtime.subscription.tool_gateway import ToolGateway
 
 SENTINEL = "synthetic-credential-sentinel-9d2c41"
+RUN_TOKEN = "synthetic-run-token-0123456789abcdef"
+SESSION_ID = "synthetic-chat-session-01"
+_ENVELOPE = {"status": "ok", "task_id": None, "next": "synthetic"}
+
+
+class RecordingApi:
+    """A loopback stand-in for the controller API; records, never judges."""
+
+    def __init__(self, agent_id: str) -> None:
+        self.requests: list[dict[str, Any]] = []
+        recorder = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def _record(self) -> None:
+                length = int(self.headers.get("content-length") or 0)
+                body = self.rfile.read(length).decode() if length else ""
+                recorder.requests.append(
+                    {
+                        "method": self.command,
+                        "path": self.path.split("?")[0],
+                        "header_names": sorted(k.lower() for k in self.headers),
+                        "token_matches": self.headers.get("x-agent-token") == RUN_TOKEN,
+                        "agent_matches": self.headers.get("x-agent-id") == agent_id,
+                        "sentinel_in_request": SENTINEL in body
+                        or any(SENTINEL in v for v in self.headers.values()),
+                    }
+                )
+                payload = json.dumps(_ENVELOPE).encode()
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            do_GET = do_POST = _record  # noqa: N815 - http.server naming
+
+            def log_message(self, *_: object) -> None:
+                return
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self._server.server_port}"
+
+    def stop(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
 
 
 class RecordingExecutor:
@@ -84,12 +144,19 @@ async def main() -> None:
     socket_path = Path("/run/roboco/gateway/gateway.sock")
     server = GatewayServer(gateway)
     await server.start(socket_path)
+    agent_id = uuid4()
+    api = RecordingApi(str(agent_id))
+    grants = tuple(
+        VerbGrant(server=VerbServer(grant["server"]), verbs=tuple(grant["verbs"]))
+        for grant in options.get("verbs", [])
+    )
     claude = service.ClaudeService(
         gateway=gateway,
         runtime_dir=Path("/run/roboco/runs"),
         socket_path=socket_path,
         inspect=_ready,
         run_seconds=options.get("run_seconds", 120),
+        orchestrator_url=api.url if grants else "",
     )
     delivery = options["purpose"] == "delivery"
     spec = RunSpec(
@@ -101,13 +168,28 @@ async def main() -> None:
         workspace_handle=uuid4() if delivery else None,
     )
     manifest = ToolManifest(
-        operations=tuple(WorkerOperation(name) for name in options["operations"])
+        operations=tuple(WorkerOperation(name) for name in options["operations"]),
+        verb_grants=grants,
     )
+    wants_session = any(g.server is VerbServer.INTAKE for g in grants)
     result = await claude.run(
-        RunRequest(spec=spec, manifest=manifest if delivery else None)
+        RunRequest(
+            spec=spec,
+            manifest=manifest if (delivery or grants) else None,
+            verb_credentials=(
+                VerbCredentials(
+                    agent_id=agent_id, role=options["role"], token=RUN_TOKEN
+                )
+                if grants
+                else None
+            ),
+            session_id=SESSION_ID if wants_session else None,
+        )
     )
     await server.stop()
+    api.stop()
     summary = {
+        "api_requests": api.requests,
         "state": result.state.value,
         "reason": result.reason_code,
         "text": result.text,

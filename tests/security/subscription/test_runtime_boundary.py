@@ -352,3 +352,146 @@ def test_the_image_has_no_docker_socket_or_project_toolchain(
     ).stdout.split()
     assert {"no-socket", "no-run-socket", "uid=10002", "cli-present"} <= set(listing)
     assert not [item for item in listing if item.startswith("tool-")]
+
+
+# --- verb servers (flow, do, intake, secretary) ---------------------------------
+
+_ALLOWED_API_HEADER_NAMES = frozenset(
+    {
+        "accept",
+        "accept-encoding",
+        "connection",
+        "content-length",
+        "content-type",
+        "host",
+        "user-agent",
+        "x-agent-id",
+        "x-agent-role",
+        "x-agent-team",
+        "x-agent-token",
+        "x-correlation-id",
+    }
+)
+# purpose, role, server, granted verb, the call the model asks for, route prefix.
+# The chat servers register every tool they have, so their grant is that whole set.
+_CHAT_SERVER_VERBS = {
+    "secretary": [
+        "read_company_state",
+        "read_task",
+        "search_tasks",
+        "submit_directive",
+    ],
+    "intake": ["search_past_tasks", "propose_draft", "propose_batch"],
+}
+VERB_CASES = [
+    pytest.param(
+        "delivery",
+        "developer",
+        "flow",
+        "i_am_idle",
+        {},
+        "/api/v1/flow/",
+        id="flow",
+    ),
+    pytest.param(
+        "delivery",
+        "developer",
+        "do",
+        "note",
+        {"text": "synthetic note"},
+        "/api/v1/do/",
+        id="do",
+    ),
+    pytest.param(
+        "secretary",
+        "secretary",
+        "secretary",
+        "read_company_state",
+        {},
+        "/api/secretary/state",
+        id="secretary",
+    ),
+    pytest.param(
+        "intake",
+        "intake",
+        "intake",
+        "search_past_tasks",
+        {"query": "synthetic query"},
+        "/api/prompter/live/",
+        id="intake",
+    ),
+]
+
+
+def _granted(server: str, verb: str) -> list[str]:
+    return _CHAT_SERVER_VERBS.get(server, [verb])
+
+
+def _verb_tool(server: str, verb: str) -> str:
+    return f"mcp__roboco_{server}__{verb}"
+
+
+@pytest.mark.parametrize(
+    ("purpose", "role", "server", "verb", "arguments", "route"), VERB_CASES
+)
+def test_a_granted_verb_reaches_only_its_route_with_only_the_run_identity(
+    stack_factory: Any,
+    purpose: str,
+    role: str,
+    server: str,
+    verb: str,
+    arguments: dict[str, Any],
+    route: str,
+) -> None:
+    stack = stack_factory(FAKE_TOOL_CALL=_call(_verb_tool(server, verb), arguments))
+    summary = stack.drive(
+        purpose=purpose,
+        role=role,
+        operations=[],
+        verbs=[{"server": server, "verbs": _granted(server, verb)}],
+    )
+    assert summary["state"] == "completed", summary
+    (request,) = summary["api_requests"]
+    assert request["path"].startswith(route), request["path"]
+    assert set(request["header_names"]) <= _ALLOWED_API_HEADER_NAMES
+    assert not request["sentinel_in_request"]
+    if server != "intake":  # the intake relay is hardened separately (Task 11)
+        assert request["token_matches"] and request["agent_matches"]
+    advertised = [
+        name
+        for name in stack.model_requests()[0]["tools"]
+        if name not in _ADVERTISED_PLACEHOLDERS
+    ]
+    assert sorted(advertised) == sorted(
+        _verb_tool(server, granted) for granted in _granted(server, verb)
+    )
+    assert not any(e.get("sentinel_in_request") for e in stack.model_requests())
+
+
+@pytest.mark.parametrize(
+    ("server", "granted", "withheld"),
+    [("flow", "i_am_idle", "give_me_work"), ("do", "note", "pitch")],
+)
+def test_a_verb_that_was_not_granted_never_reaches_the_api(
+    stack_factory: Any, server: str, granted: str, withheld: str
+) -> None:
+    stack = stack_factory(FAKE_TOOL_CALL=_call(_verb_tool(server, withheld), {}))
+    summary = stack.drive(
+        role="developer",
+        operations=[],
+        verbs=[{"server": server, "verbs": [granted]}],
+    )
+    assert summary["api_requests"] == []
+    assert _verb_tool(server, withheld) not in stack.model_requests()[0]["tools"]
+
+
+def test_a_verb_server_cannot_reach_the_credential_store(stack_factory: Any) -> None:
+    stack = stack_factory(
+        FAKE_TOOL_CALL=_call(_verb_tool("do", "note"), {"text": "synthetic"})
+    )
+    summary = stack.drive(
+        role="developer",
+        operations=[],
+        verbs=[{"server": "do", "verbs": ["note"]}],
+    )
+    assert SENTINEL not in json.dumps(summary)
