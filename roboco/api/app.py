@@ -85,7 +85,14 @@ from roboco.api.websocket import router as ws_router
 from roboco.config import settings
 from roboco.db.base import close_db, get_session_factory, init_db
 from roboco.logging import get_logger, setup_logging
+from roboco.runtime.engines.subscription_dispatch import (
+    SubscriptionNotConfigured,
+    build_project_executor_provider,
+)
 from roboco.runtime.subscription.policy import validate_subscription_policy
+from roboco.runtime.subscription.project_executor import (
+    configure_project_executor_provider,
+)
 from roboco.security import apply_guard, guarded_lifespan
 from roboco.services.base import FeatureUnavailableError
 from roboco.services.extraction import ExtractionPipeline, ExtractionService
@@ -171,6 +178,14 @@ async def _apply_flag_overrides() -> None:
         logger.warning("Feature-flag overlay failed; using env defaults", error=str(e))
 
 
+def _configure_project_execution() -> None:
+    """Send project commands to offline workers; with no launcher none can run."""
+    try:
+        configure_project_executor_provider(build_project_executor_provider(settings))
+    except SubscriptionNotConfigured as exc:
+        logger.warning("Project execution is not available: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     """
@@ -179,6 +194,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     Handles startup and shutdown events.
     """
     validate_subscription_policy(settings)
+    _configure_project_execution()
     logger.info(
         "Starting RoboCo API",
         version=settings.app_version,

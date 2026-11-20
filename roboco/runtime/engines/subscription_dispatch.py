@@ -22,7 +22,10 @@ from roboco.runtime.engines.subscription_runs import (
     tool_manifest_for_role,
 )
 from roboco.runtime.subscription.client import SubscriptionClient
-from roboco.runtime.subscription.launcher_client import LauncherAdmin
+from roboco.runtime.subscription.launcher_client import LauncherAdmin, WorkerLauncher
+from roboco.runtime.subscription.launcher_project_executors import (
+    LauncherProjectExecutorProvider,
+)
 from roboco.seeds.initial_data import AGENT_UUIDS
 from roboco.services.gateway.role_config import ROLE_CONFIGS, get_role_config
 
@@ -80,6 +83,38 @@ def build_run_supervisor(config: Settings) -> RunSupervisor:
             read_token_file(config.launcher_admin_token_file, what="launcher admin"),
         )
     return RunSupervisor(client, registrar, ACTIVE_RUNS)
+
+
+async def _linked_workspace_of(project_id: UUID) -> UUID | None:
+    from roboco.db.base import get_session_factory
+    from roboco.services.project import get_project_service
+
+    async with get_session_factory()() as session:
+        project = await get_project_service(session).get(project_id)
+        return None if project is None else project.offline_workspace_handle
+
+
+def build_project_executor_provider(
+    config: Settings,
+) -> LauncherProjectExecutorProvider:
+    """The provider that runs project commands in offline workers.
+
+    Needs both launcher tokens: the admin token registers the run, the executor
+    token runs its jobs. Raises when the launcher is not configured.
+    """
+    if not config.launcher_host:
+        raise SubscriptionNotConfigured("launcher host is not configured")
+    admin = LauncherAdmin(
+        config.launcher_host,
+        config.launcher_port,
+        read_token_file(config.launcher_admin_token_file, what="launcher admin"),
+    )
+    launcher = WorkerLauncher(
+        config.launcher_host,
+        config.launcher_port,
+        read_token_file(config.launcher_executor_token_file, what="launcher executor"),
+    )
+    return LauncherProjectExecutorProvider(admin, launcher, _linked_workspace_of)
 
 
 async def resolve_project_binding(project_slug: str | None) -> ProjectBinding | None:

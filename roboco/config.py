@@ -352,6 +352,10 @@ class Settings(BaseSettings):
         default="",
         description="File holding the launcher admin token (registers runs).",
     )
+    launcher_executor_token_file: str = Field(
+        default="",
+        description="File holding the launcher executor token (runs project jobs).",
+    )
     subscription_status_timeout_seconds: float = Field(
         default=15.0,
         gt=0,

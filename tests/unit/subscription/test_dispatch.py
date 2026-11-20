@@ -14,6 +14,7 @@ from roboco.runtime.engines.subscription_dispatch import (
     SubscriptionNotConfigured,
     WorkspaceNotLinked,
     build_run_launch,
+    build_project_executor_provider,
     build_run_supervisor,
     read_token_file,
 )
@@ -78,7 +79,13 @@ class FakeClient:
 class FakeRegistrar:
     def __init__(self) -> None:
         self.registered: list[tuple[UUID, UUID, UUID]] = []
+        self.workspaces: list[tuple[UUID, UUID]] = []
         self.released: list[UUID] = []
+
+    async def register_workspace(
+        self, workspace_handle: UUID, project_id: UUID
+    ) -> None:
+        self.workspaces.append((workspace_handle, project_id))
 
     async def register_run(
         self, run_id: UUID, project_id: UUID, workspace_handle: UUID
@@ -125,6 +132,7 @@ async def test_run_registers_worker_activates_scope_and_releases_both() -> None:
     supervisor, active = _supervisor(client, registrar)
     handle = await supervisor.start(_launch())
     assert await _settle(supervisor, "be-dev-1") == (False, 0)
+    assert registrar.workspaces == [(WORKSPACE, PROJECT_ID)]
     assert registrar.registered == [(UUID(handle), PROJECT_ID, WORKSPACE)]
     assert registrar.released == [UUID(handle)]
     assert not active.is_active(handle)
@@ -277,6 +285,25 @@ def test_supervisor_is_not_built_without_a_service(tmp_path) -> None:
     )
     with pytest.raises(SubscriptionNotConfigured):
         build_run_supervisor(no_token)  # type: ignore[arg-type]
+
+
+def test_project_executor_provider_needs_a_launcher_and_both_tokens(tmp_path) -> None:
+    with pytest.raises(SubscriptionNotConfigured):
+        build_project_executor_provider(SimpleNamespace(launcher_host=""))  # type: ignore[arg-type]
+    admin = tmp_path / "admin"
+    admin.write_text("synthetic-admin")
+    config = SimpleNamespace(
+        launcher_host="launcher",
+        launcher_port=8765,
+        launcher_admin_token_file=str(admin),
+        launcher_executor_token_file="",
+    )
+    with pytest.raises(SubscriptionNotConfigured):
+        build_project_executor_provider(config)  # type: ignore[arg-type]
+    executor = tmp_path / "executor"
+    executor.write_text("synthetic-executor")
+    config.launcher_executor_token_file = str(executor)
+    assert build_project_executor_provider(config) is not None  # type: ignore[arg-type]
 
 
 def _agent_config(tmp_path, agent_id: str = "be-dev-1") -> SimpleNamespace:

@@ -124,6 +124,10 @@ def tool_manifest_for_role(role: RoleConfig, *, has_workspace: bool) -> ToolMani
 class RunRegistrar(Protocol):
     """Registers a run with the worker launcher so worker tools can be bound."""
 
+    async def register_workspace(
+        self, workspace_handle: UUID, project_id: UUID
+    ) -> None: ...
+
     async def register_run(
         self, run_id: UUID, project_id: UUID, workspace_handle: UUID
     ) -> None: ...
@@ -225,11 +229,12 @@ class RunSupervisor:
         if registered:
             if self._registrar is None:
                 raise WorkerToolsUnavailable(str(run_id))
-            await self._registrar.register_run(
-                run_id,
-                cast("UUID", launch.project_id),
-                cast("UUID", launch.workspace_handle),
-            )
+            project_id = cast("UUID", launch.project_id)
+            workspace_handle = cast("UUID", launch.workspace_handle)
+            # The launcher forgets workspaces when it restarts; registering is
+            # idempotent for the owning project, so every run re-asserts it.
+            await self._registrar.register_workspace(workspace_handle, project_id)
+            await self._registrar.register_run(run_id, project_id, workspace_handle)
         self._active_runs.activate(str(run_id))
         task = asyncio.create_task(
             self._drive(
