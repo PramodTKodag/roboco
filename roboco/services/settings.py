@@ -9,6 +9,7 @@ writable, each with a validator, so the panel can't persist junk.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
@@ -18,6 +19,7 @@ from roboco.foundation.policy.maintenance_pause import (
     PauseScope,
     validate_pause_payload,
 )
+from roboco.foundation.policy.subscription_policy import FORBIDDEN_FEATURE_FLAGS
 from roboco.services.base import BaseService
 from roboco.services.repositories.query_helpers import get_agent_by_role
 
@@ -43,6 +45,29 @@ def _validate_retention_days(value: str) -> None:
 def _validate_bool(value: str) -> None:
     if value.strip().lower() not in ("true", "false"):
         raise SettingValidationError("value must be 'true' or 'false'")
+
+
+def _validate_forbidden_feature_flag(value: str) -> None:
+    """Flags that route traffic to a second provider can only be stored as off."""
+    _validate_bool(value)
+    if value.strip().lower() == "true":
+        raise SettingValidationError(
+            "blocked by the subscription-only policy: this feature cannot be enabled"
+        )
+
+
+def _validate_billing_acknowledgement(value: str) -> None:
+    """Owner's local note that paid extra usage and top-ups are disabled.
+
+    A timestamp, nothing else: it records that the owner said so, and is never
+    treated as proof of the account's real billing state.
+    """
+    try:
+        datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise SettingValidationError(
+            "subscription_billing_acknowledged_at must be an ISO-8601 timestamp"
+        ) from exc
 
 
 def _validate_pilot_mode(value: str) -> None:
@@ -149,6 +174,7 @@ def _validate_update_id(value: str) -> None:
 # the panel can only persist values the backend understands.
 _VALIDATORS = {
     "transcript_retention_days": _validate_retention_days,
+    "subscription_billing_acknowledged_at": _validate_billing_acknowledgement,
     # The CEO's panel display name (header chip + Settings User Info card).
     # An unset key just means the panel's own hardcoded "Renzo" default
     # renders, same as transcript retention's client-side DEFAULT_RETENTION
@@ -265,6 +291,7 @@ _VALIDATORS = {
         _validate_pilot_mode,
     ),
     **dict.fromkeys(_FEATURE_FLAG_KEYS, _validate_bool),
+    **dict.fromkeys(FORBIDDEN_FEATURE_FLAGS, _validate_forbidden_feature_flag),
     # Operator maintenance pause: one JSON payload per scope (see
     # roboco.services.maintenance_pause). Not a feature flag: it has no
     # roboco.config attribute, is written by its own CEO-only route, and
@@ -355,7 +382,8 @@ async def feature_flag_effective_values(session: AsyncSession) -> dict[str, bool
 
     service = get_settings_service(session)
     return {
-        key: await service.get_bool(key, bool(getattr(_settings, key, False)))
+        key: key not in FORBIDDEN_FEATURE_FLAGS
+        and await service.get_bool(key, bool(getattr(_settings, key, False)))
         for key in _FEATURE_FLAG_KEYS
     }
 
@@ -376,6 +404,9 @@ async def apply_persisted_feature_flags(session: AsyncSession) -> list[str]:
     for key in _FEATURE_FLAG_KEYS:
         raw = await service.get(key)
         if raw is None:
+            continue
+        if key in FORBIDDEN_FEATURE_FLAGS:
+            # A stored row can never switch on a second-provider feature.
             continue
         setattr(_settings, key, raw.strip().lower() == "true")
         applied.append(key)

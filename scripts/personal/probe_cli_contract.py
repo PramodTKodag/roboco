@@ -28,6 +28,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from roboco.foundation.policy.subscription_policy import (  # noqa: F401 - re-exported
+    classify_auth_status,
+    classify_auth_status_text,
+)
+
 if TYPE_CHECKING:
     from types import TracebackType
 
@@ -61,11 +66,6 @@ FAKE_PROVIDER_IMAGE = (
     "a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72"
 )
 
-SUBSCRIPTION_AUTH_METHOD = (
-    "claude.ai"  # UNVERIFIED against a live login until the owner login checkpoint.
-)
-FIRST_PARTY_PROVIDER = "firstParty"
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CACHE_DIR = _REPO_ROOT / ".probe-cache"
 _FAKE_PROVIDER_SCRIPT = (
@@ -94,42 +94,6 @@ def matches_subresource_integrity(data: bytes, sri: str) -> bool:
     if algorithm != "sha512":
         return False
     return base64.b64encode(hashlib.sha512(data).digest()).decode() == encoded
-
-
-def _classify_logged_in_method(method: str, payload: dict) -> str:
-    if method == "api_key":
-        return "rejected_auth_method"
-    if method != SUBSCRIPTION_AUTH_METHOD:
-        return "unknown_schema"
-    return "rejected_mixed_auth" if "apiKeySource" in payload else "subscription"
-
-
-def classify_auth_status(payload: dict) -> str:
-    """Classify `claude auth status --json`; anything unrecognised blocks dispatch."""
-    logged_in = payload.get("loggedIn")
-    method = payload.get("authMethod")
-    provider = payload.get("apiProvider")
-    if (
-        not isinstance(logged_in, bool)
-        or not isinstance(method, str)
-        or not isinstance(provider, str)
-    ):
-        return "unknown_schema"
-    if provider != FIRST_PARTY_PROVIDER:
-        return "rejected_provider"
-    if not logged_in:
-        return "login_required" if method == "none" else "unknown_schema"
-    return _classify_logged_in_method(method, payload)
-
-
-def classify_auth_status_text(text: str) -> str:
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        return "unknown_schema"
-    return (
-        classify_auth_status(payload) if isinstance(payload, dict) else "unknown_schema"
-    )
 
 
 @dataclass(frozen=True)

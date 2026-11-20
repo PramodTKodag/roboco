@@ -7,10 +7,17 @@ Separates CLI argument parsing from bootstrap logic.
 
 import argparse
 import asyncio
+import sys
 
 from roboco.bootstrap import main
 from roboco.config import resolve_uvicorn_loop_factory, settings
 from roboco.db import bootstrap_database
+from roboco.runtime.subscription.policy import (
+    SubscriptionPolicyViolation,
+    validate_subscription_policy,
+)
+
+_POLICY_EXIT_CODE = 2
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,6 +49,11 @@ def parse_args() -> argparse.Namespace:
 def cli() -> None:
     """CLI entry point."""
     args = parse_args()
+    try:
+        validate_subscription_policy(settings)
+    except SubscriptionPolicyViolation as violation:
+        print(f"RoboCo refused to start: {violation}", file=sys.stderr)
+        sys.exit(_POLICY_EXIT_CODE)
     # Sets the process-wide event loop for the whole run — including the
     # API server started inside main() via Server.serve(), which never
     # reads uvicorn's own Config.loop (see resolve_uvicorn_loop_factory).

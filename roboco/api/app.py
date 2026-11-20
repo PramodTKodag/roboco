@@ -79,6 +79,7 @@ from roboco.api.websocket import router as ws_router
 from roboco.config import settings
 from roboco.db.base import close_db, get_session_factory, init_db
 from roboco.logging import get_logger, setup_logging
+from roboco.runtime.subscription.policy import validate_subscription_policy
 from roboco.security import apply_guard, guarded_lifespan
 from roboco.services.decisions.resolver import (
     check_openrouter_fallback_at_startup,
@@ -164,6 +165,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
     Handles startup and shutdown events.
     """
+    validate_subscription_policy(settings)
     logger.info(
         "Starting RoboCo API",
         version=settings.app_version,

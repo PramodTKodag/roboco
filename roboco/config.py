@@ -299,6 +299,20 @@ class Settings(BaseSettings):
     # ==========================================================================
     anthropic_api_key: str | None = None
 
+    # Official Claude CLI used for subscription status checks and runs. A
+    # trusted operator path (never task-supplied); the personal deployment
+    # mounts the pinned, digest-verified binary here read-only.
+    subscription_cli_path: str = Field(
+        default="/opt/claude/claude",
+        description="Absolute path of the pinned official Claude CLI binary.",
+    )
+    subscription_status_timeout_seconds: float = Field(
+        default=15.0,
+        gt=0,
+        le=60,
+        description="Hard cap on one `claude auth status` check.",
+    )
+
     # Default models
     default_embedding_model: str = Field(
         default="qwen3-embedding:0.6b",

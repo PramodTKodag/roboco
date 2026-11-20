@@ -51,8 +51,8 @@ Result is green on the *insecure* upstream behavior, so these tests encode the m
 | Task | Status | Commit | Evidence / blockers |
 | --- | --- | --- | --- |
 | 0 Baseline | done | 4eb4f66c | baseline above; fork verified |
-| 1 CLI contract proof | **partial**: synthetic layer proven | (this commit) | 36 tests pass against the real pinned binary (container, synthetic provider). Open: live subscription login, TLS-proxy compatibility + endpoint inventory (feeds Task 10). See `cli-contract.md`. |
-| 2 Policy + status | not started | — | — |
+| 1 CLI contract proof | **partial**: synthetic layer proven | 2af3082b, f255151b | 36 tests pass against the real pinned binary (container, synthetic provider). TLS-proxy mechanism proven feasible on synthetic traffic (same-host telemetry confirmed; path-level policy required). Open: live subscription login (authMethod value), OAuth endpoint inventory, bound on CLI-internal retries (Task 6). See `cli-contract.md`. |
+| 2 Policy + status | **done (synthetic/mocked)** | (this commit) | 64 unit tests in `tests/unit/subscription`: allowlisted env, prefix-based inherited-override rejection (names only), API-key/flag rejection at CLI start + API lifespan, DB rows cannot enable forbidden flags, redacted status via a stand-in CLI script, frozen bounded contracts. Gates run: ruff, mypy, xenon, radon, vulture, bandit, lint-imports, foundation checks. Scope notes: worker contracts (`WorkerJob`/`WorkerResult`) are defined in Task 3/4/5 where first consumed. Model allowlist IDs are unverified until a live run. Billing acknowledgement is a local timestamp, not proof. |
 | 3 Launcher | not started | — | — |
 | 4 Workspace admission + files | not started | — | — |
 | 5 Project execution out of controller | not started | — | — |
@@ -64,6 +64,12 @@ Result is green on the *insecure* upstream behavior, so these tests encode the m
 | 11 UI/auth/logs | not started | — | — |
 | 12 Deployment | not started | — | — |
 | 13 Acceptance + report | not started | — | — |
+
+## Known environment limitations (not caused by this work)
+
+- Disposable test Postgres (`postgres:15.4-alpine`) has no `pgvector` and rejects the `roboco` password the cloud-auth login test expects: 4 existing tests fail identically with and without these changes (`test_vector_store_hnsw_index` x3, `test_cloud_auth::test_login_route_parses_oauth2_form_not_query_params`). A pgvector-enabled disposable image is needed for a fully green suite.
+- The developer shell exports provider/Claude variables, which the new startup policy correctly rejects; `tests/conftest.py` scrubs them for tests only.
+- `roboco.runtime.__init__` imports the orchestrator, so importing `roboco.runtime.subscription.*` pulls the full application. Task 6 must keep the credential-bearing service image's import surface minimal (or move the service entry point out of that package).
 
 ## Owner-dependent items
 

@@ -59,6 +59,7 @@ from roboco.db.tables import (
     ProjectTable,
     TaskTable,
 )
+from roboco.foundation.policy.subscription_policy import forbidden_env_names
 from roboco.models.base import (
     AgentRole,
     AgentStatus,
@@ -131,6 +132,19 @@ def _hermetic_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     # suites arm them per-test.
     monkeypatch.setattr(_settings, "cloud_auth_enabled", False)
     monkeypatch.setattr(_settings, "guard_enabled", False)
+
+
+@pytest.fixture(autouse=True)
+def _no_inherited_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never inherit the developer's provider keys or CLI overrides.
+
+    The subscription-only policy refuses to start with any such variable in the
+    environment, so an ambient key would fail every test that boots the app.
+    Policy tests pass their own ``environ`` and set variables explicitly.
+    """
+    for name in forbidden_env_names(os.environ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(_settings, "anthropic_api_key", None)
 
 
 @pytest.fixture(autouse=True)
