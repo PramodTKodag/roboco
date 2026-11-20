@@ -14,7 +14,7 @@ from uuid import UUID
 
 import jwt
 import structlog
-from fastapi import Cookie, Depends, Header, HTTPException, Response, status
+from fastapi import Cookie, Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -603,6 +603,37 @@ async def require_intake_agent(agent: CurrentAgentContext) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the intake interviewer may use the intake relay",
         )
+
+
+_SAFE_HTTP_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+_FORBIDDEN_INTEGRATION_DETAIL = (
+    "Blocked by the subscription-only policy: this integration cannot be used"
+)
+
+
+async def refuse_forbidden_integration_writes(request: Request) -> None:
+    """Raise 403 for any state-changing call to a policy-forbidden integration.
+
+    Status reads stay available so the panel can show the integration as unset;
+    nothing that would store a credential or act on a third party gets through.
+    """
+    if request.method not in _SAFE_HTTP_METHODS:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=_FORBIDDEN_INTEGRATION_DETAIL,
+        )
+
+
+async def refuse_forbidden_integration() -> None:
+    """Raise 403 for every call to a route that reaches a forbidden endpoint.
+
+    Used where even a read leaves the subscription runtime (a third-party API
+    call, a user-supplied model URL) or serves project-authored active content.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=_FORBIDDEN_INTEGRATION_DETAIL,
+    )
 
 
 # =============================================================================

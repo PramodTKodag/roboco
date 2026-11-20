@@ -14,6 +14,7 @@ from roboco.api.schemas.settings import (
     SettingsResponse,
     SettingUpdate,
 )
+from roboco.foundation.policy.subscription_policy import FORBIDDEN_FEATURE_FLAGS
 from roboco.security import guard_deco
 from roboco.services.settings import (
     FEATURE_FLAGS,
@@ -37,7 +38,12 @@ async def get_feature_flags(db: DbSession) -> FeatureFlagsResponse:
     effective = await feature_flag_effective_values(db)
     return FeatureFlagsResponse(
         flags=[
-            FeatureFlag(key=key, label=label, enabled=effective.get(key, False))
+            FeatureFlag(
+                key=key,
+                label=label,
+                enabled=effective.get(key, False),
+                locked=key in FORBIDDEN_FEATURE_FLAGS,
+            )
             for key, label in FEATURE_FLAGS
         ]
     )

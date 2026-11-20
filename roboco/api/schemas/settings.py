@@ -39,6 +39,9 @@ class FeatureFlag(BaseModel):
     key: str
     label: str
     enabled: bool
+    # True when the subscription-only policy forbids this feature: it can be
+    # neither switched on nor stored on, so the panel shows it read-only.
+    locked: bool = False
 
 
 class FeatureFlagsResponse(BaseModel):

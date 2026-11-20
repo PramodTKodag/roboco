@@ -19,7 +19,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from roboco.api.deps import get_agent_context, get_db
+from roboco.api.deps import get_agent_context, get_db, refuse_forbidden_integration
 from roboco.api.routes.github_app import router as github_app_router
 from roboco.models import AgentRole
 from roboco.models.permissions import AgentContext
@@ -34,6 +34,10 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from sqlalchemy.ext.asyncio import AsyncSession
+
+
+async def _allow_integration() -> None:
+    return None
 
 
 def _generate_rsa_pem() -> str:
@@ -60,6 +64,9 @@ def _build_app(db_session: AsyncSession, role: AgentRole, agent_id: UUID) -> Fas
 
     app.dependency_overrides[get_db] = _override_db
     app.dependency_overrides[get_agent_context] = _override_agent
+    # Handler-level tests; the real app's refusal is proven in
+    # tests/unit/api/test_forbidden_integrations.py.
+    app.dependency_overrides[refuse_forbidden_integration] = _allow_integration
     return app
 
 

@@ -9,10 +9,10 @@ import asyncio
 from typing import cast
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse, StreamingResponse
 
-from roboco.api.deps import CurrentAgentContext, DbSession
+from roboco.api.deps import CurrentAgentContext, DbSession, refuse_forbidden_integration
 from roboco.api.schemas.video import (
     TikTokCredentialsSetRequest,
     TikTokCredentialsStatus,
@@ -160,7 +160,11 @@ async def rerender_video_task(
     return _to_pipeline_item(task)
 
 
-@router.get("/preview/{task_id}/{file_path:path}", response_model=None)
+@router.get(
+    "/preview/{task_id}/{file_path:path}",
+    response_model=None,
+    dependencies=[Depends(refuse_forbidden_integration)],
+)
 async def get_video_preview(
     task_id: UUID,
     file_path: str,

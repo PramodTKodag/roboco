@@ -9,14 +9,18 @@ import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from roboco.api.access_guard import LocalAccessGuardMiddleware
 from roboco.api.auth.login_limit import LoginRateLimiter
 from roboco.api.auth.routes import mount_cloud_auth
 from roboco.api.auth.seed import ensure_seed_user_startup
-from roboco.api.deps import _auth_required, get_orchestrator_or_none
+from roboco.api.deps import (
+    _auth_required,
+    get_orchestrator_or_none,
+    refuse_forbidden_integration_writes,
+)
 from roboco.api.middleware import setup_middleware
 from roboco.api.routes.a2a import router as a2a_router
 from roboco.api.routes.a2a import wellknown_router as a2a_wellknown_router
@@ -104,6 +108,11 @@ class _AppServices:
 
     transcription: TranscriptionService | None = None
     extraction: ExtractionPipeline | None = None
+
+
+# Routers of integrations the subscription-only policy forbids: they stay mounted
+# so the panel can read their (unset) status, but no call can change state.
+_FORBIDDEN_INTEGRATION_WRITES = [Depends(refuse_forbidden_integration_writes)]
 
 
 async def _start_optimal_service(app: FastAPI) -> None:
@@ -515,6 +524,7 @@ def create_app() -> FastAPI:
     app.include_router(
         x_router,
         prefix=f"{api_prefix}/x",
+        dependencies=_FORBIDDEN_INTEGRATION_WRITES,
         tags=["X"],
     )
 
@@ -531,6 +541,7 @@ def create_app() -> FastAPI:
     app.include_router(
         video_router,
         prefix=f"{api_prefix}/video",
+        dependencies=_FORBIDDEN_INTEGRATION_WRITES,
         tags=["Video"],
     )
 
@@ -539,6 +550,7 @@ def create_app() -> FastAPI:
     app.include_router(
         tiktok_router,
         prefix=f"{api_prefix}/tiktok",
+        dependencies=_FORBIDDEN_INTEGRATION_WRITES,
         tags=["TikTok"],
     )
 
@@ -547,6 +559,7 @@ def create_app() -> FastAPI:
     app.include_router(
         telegram_router,
         prefix=f"{api_prefix}/telegram",
+        dependencies=_FORBIDDEN_INTEGRATION_WRITES,
         tags=["Telegram"],
     )
     # Telegram Mini App sign-in — public, pre-auth; mounted only when both
@@ -634,6 +647,7 @@ def create_app() -> FastAPI:
     app.include_router(
         github_app_router,
         prefix=f"{api_prefix}/github-app",
+        dependencies=_FORBIDDEN_INTEGRATION_WRITES,
         tags=["GitHub App"],
     )
 

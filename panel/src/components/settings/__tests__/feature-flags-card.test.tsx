@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import type { FeatureFlagsResponse } from "@/lib/api/settings";
 
 // Deferred mutationFn: the test holds every pending resolver in a queue so it
 // can freeze multiple toggles mid-flight and release them one at a time. This
@@ -19,10 +20,10 @@ const { setFeatureFlag, getFeatureFlags } = vi.hoisted(() => ({
         resolveQueue.current.push(r as (v: unknown) => void);
       }),
   ),
-  getFeatureFlags: vi.fn(async () => ({
+  getFeatureFlags: vi.fn(async (): Promise<FeatureFlagsResponse> => ({
     flags: [
-      { key: "alpha", label: "Alpha", enabled: true },
-      { key: "beta", label: "Beta", enabled: false },
+      { key: "alpha", label: "Alpha", enabled: true, locked: false },
+      { key: "beta", label: "Beta", enabled: false, locked: false },
     ],
     note: "Changes take effect on the next backend restart.",
   })),
@@ -137,11 +138,12 @@ describe("FeatureFlagsCard — M42 off-transition confirm + pending-keys Set", (
   it("attaches the mapped tooltip to a real flag key and leaves unmapped keys bare", async () => {
     getFeatureFlags.mockResolvedValueOnce({
       flags: [
-        { key: "alpha", label: "Alpha", enabled: true },
+        { key: "alpha", label: "Alpha", enabled: true, locked: false },
         {
           key: "external_pr_enabled",
           label: "External PR Review",
           enabled: true,
+          locked: false,
         },
       ],
       note: "Changes take effect on the next backend restart.",
@@ -160,13 +162,24 @@ describe("FeatureFlagsCard — M42 off-transition confirm + pending-keys Set", (
   it("renders an always-visible description for every vault/docs-sync flag", async () => {
     getFeatureFlags.mockResolvedValueOnce({
       flags: [
-        { key: "docs_sync_enabled", label: "Docs Sync", enabled: false },
+        {
+          key: "docs_sync_enabled",
+          label: "Docs Sync",
+          enabled: false,
+          locked: false,
+        },
         {
           key: "obsidian_vault_enabled",
           label: "Obsidian Vault",
           enabled: false,
+          locked: false,
         },
-        { key: "vault_intake_enabled", label: "Vault Intake", enabled: false },
+        {
+          key: "vault_intake_enabled",
+          label: "Vault Intake",
+          enabled: false,
+          locked: false,
+        },
       ],
       note: "Changes take effect on the next backend restart.",
     });
@@ -186,6 +199,7 @@ describe("FeatureFlagsCard — M42 off-transition confirm + pending-keys Set", (
           key: "task_budgets_enabled",
           label: "Task/project cost budgets",
           enabled: false,
+          locked: false,
         },
       ],
       note: "Changes take effect on the next backend restart.",
@@ -197,5 +211,29 @@ describe("FeatureFlagsCard — M42 off-transition confirm + pending-keys Set", (
     ).toBeInTheDocument();
     const label = screen.getByText("Task/project cost budgets");
     expect(label.getAttribute("data-state")).toBe("closed");
+  });
+
+  it("shows a policy-locked flag as read-only with no credential form", async () => {
+    getFeatureFlags.mockResolvedValueOnce({
+      flags: [
+        {
+          key: "x_engine_enabled",
+          label: "X engine",
+          enabled: false,
+          locked: true,
+        },
+      ],
+      note: "Changes take effect on the next backend restart.",
+    });
+    render(withQueryClient(<FeatureFlagsCard />));
+
+    const toggle = await screen.findByRole("switch", { name: "X engine" });
+    expect(toggle).toBeDisabled();
+    expect(
+      screen.getByText(/locked by the subscription-only policy/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("X (Twitter) credentials"),
+    ).not.toBeInTheDocument();
   });
 });

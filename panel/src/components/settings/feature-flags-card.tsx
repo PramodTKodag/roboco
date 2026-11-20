@@ -288,11 +288,17 @@ export function FeatureFlagsCard() {
                     <p className="text-sm text-muted-foreground">
                       {FLAG_DESCRIPTIONS[flag.key] ?? ""}
                     </p>
+                    {flag.locked && (
+                      <p className="mt-1 text-xs font-medium text-muted-foreground">
+                        Locked by the subscription-only policy. It cannot be
+                        turned on.
+                      </p>
+                    )}
                   </div>
                   <Switch
                     id={`flag-${flag.key}`}
                     checked={flag.enabled}
-                    disabled={pendingKeys.has(flag.key)}
+                    disabled={flag.locked || pendingKeys.has(flag.key)}
                     onCheckedChange={(checked) => {
                       // Off-transitions are destructive (a running subsystem
                       // stops on the next restart) — confirm before firing.
@@ -305,7 +311,7 @@ export function FeatureFlagsCard() {
                     }}
                   />
                 </div>
-                {isXEngine && (
+                {isXEngine && !flag.locked && (
                   <Collapsible
                     open={xCredsOpen}
                     onOpenChange={setXCredsOpen}
@@ -338,7 +344,7 @@ export function FeatureFlagsCard() {
                     </CollapsibleContent>
                   </Collapsible>
                 )}
-                {isVideoEngine && (
+                {isVideoEngine && !flag.locked && (
                   <Collapsible
                     open={tiktokCredsOpen}
                     onOpenChange={setTiktokCredsOpen}
@@ -365,7 +371,7 @@ export function FeatureFlagsCard() {
                     </CollapsibleContent>
                   </Collapsible>
                 )}
-                {isTelegram && (
+                {isTelegram && !flag.locked && (
                   <Collapsible
                     open={telegramCredsOpen}
                     onOpenChange={setTelegramCredsOpen}

@@ -11,7 +11,12 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from roboco.api.deps import get_agent_context, get_db
+from roboco.api.deps import (
+    get_agent_context,
+    get_db,
+    refuse_forbidden_integration,
+    refuse_forbidden_integration_writes,
+)
 from roboco.api.routes.provider import router as provider_router
 from roboco.billing.pricing import input_price_per_million
 from roboco.db.tables import (
@@ -63,8 +68,15 @@ def _make_app(
     async def _override_agent() -> AgentContext:
         return AgentContext(agent_id=uuid4(), role=role, team=team)
 
+    async def _allow() -> None:
+        return None
+
     app.dependency_overrides[get_db] = _override_db
     app.dependency_overrides[get_agent_context] = _override_agent
+    # These tests exercise the handlers themselves; the policy refusal that fronts
+    # them in the real app is proven in tests/unit/api/test_forbidden_integrations.py.
+    app.dependency_overrides[refuse_forbidden_integration] = _allow
+    app.dependency_overrides[refuse_forbidden_integration_writes] = _allow
     return app
 
 

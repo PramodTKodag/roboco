@@ -14,6 +14,8 @@ export interface FeatureFlag {
   key: string;
   label: string;
   enabled: boolean;
+  // True when the subscription-only policy forbids the feature (read-only).
+  locked: boolean;
 }
 
 export interface FeatureFlagsResponse {

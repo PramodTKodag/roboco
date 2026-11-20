@@ -9,9 +9,9 @@ list the App's installations, then list one installation's repositories.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 
-from roboco.api.deps import CurrentAgentContext, DbSession
+from roboco.api.deps import CurrentAgentContext, DbSession, refuse_forbidden_integration
 from roboco.api.schemas.github_app import (
     GitHubAppCredentialsSetRequest,
     GitHubAppCredentialsStatus,
@@ -84,7 +84,11 @@ async def clear_github_app_credentials(
     return GitHubAppCredentialsStatus(has_credentials=has_creds)
 
 
-@router.get("/installations", response_model=list[InstallationResponse])
+@router.get(
+    "/installations",
+    response_model=list[InstallationResponse],
+    dependencies=[Depends(refuse_forbidden_integration)],
+)
 @guard_deco.rate_limit(requests=30, window=60)
 async def get_installations(
     db: DbSession, agent: CurrentAgentContext
@@ -108,6 +112,7 @@ async def get_installations(
 @router.get(
     "/installations/{installation_id}/repositories",
     response_model=list[InstallationRepositoryResponse],
+    dependencies=[Depends(refuse_forbidden_integration)],
 )
 @guard_deco.rate_limit(requests=30, window=60)
 async def get_installation_repositories(

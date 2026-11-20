@@ -14,7 +14,7 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from roboco.api.deps import get_agent_context, get_db
+from roboco.api.deps import get_agent_context, get_db, refuse_forbidden_integration
 from roboco.api.routes import video as video_module
 from roboco.api.routes.video import router as video_router
 from roboco.api.routes.video import tiktok_router
@@ -47,6 +47,10 @@ UX_DEV_2_UUID = _foundation.AGENTS["ux-dev-2"].uuid
 HISTORY_LIMIT = 2
 RETRY_ATTEMPTS = 2
 PREVIEW_DURATION_SECONDS = 6.0
+
+
+async def _allow_integration() -> None:
+    return None
 
 
 async def _seed(session: AsyncSession) -> None:
@@ -237,6 +241,9 @@ def _build_app(
 
     app.dependency_overrides[get_db] = _override_db
     app.dependency_overrides[get_agent_context] = _override_agent
+    # Handler-level tests; the real app's refusal is proven in
+    # tests/unit/api/test_forbidden_integrations.py.
+    app.dependency_overrides[refuse_forbidden_integration] = _allow_integration
     return app
 
 
