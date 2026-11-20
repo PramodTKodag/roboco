@@ -49,11 +49,11 @@ from roboco.foundation.policy.content import markers
 from roboco.foundation.policy.injection_guard import (
     screen_external_text_with_decisions,
 )
-from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models.base import Complexity, TaskNature, TaskStatus, TaskType, Team
 from roboco.services.base import BaseService
 from roboco.services.board_programs import program_armed
 from roboco.services.company_goals import get_company_goals_service
+from roboco.services.direct_clients import require_direct_model_clients
 from roboco.services.notification_delivery import get_notification_delivery_service
 from roboco.services.project import get_project_service
 from roboco.services.settings import get_settings_service

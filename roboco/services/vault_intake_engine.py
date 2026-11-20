@@ -50,9 +50,9 @@ from roboco.foundation.policy.injection_guard import (
 )
 from roboco.foundation.policy.vault_notes import content_hash as _content_hash
 from roboco.foundation.policy.vault_notes import split_frontmatter as _split_frontmatter
-from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models.base import Complexity, TaskNature, TaskStatus, TaskType, Team
 from roboco.services.base import BaseService
+from roboco.services.direct_clients import require_direct_model_clients
 from roboco.services.project import get_project_service
 from roboco.services.task import VAULT_NOTE_SOURCE, TaskCreateRequest, get_task_service
 

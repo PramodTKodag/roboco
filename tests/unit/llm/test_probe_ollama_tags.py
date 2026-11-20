@@ -16,13 +16,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from roboco.services.base import FeatureUnavailableError
 from roboco.services.llm import probe_ollama_tags
 
 _BASE_URL = "http://localhost:11434"
 
 
+@pytest.fixture
+def _probe_unlocked(direct_model_clients_on: None) -> None:
+    """The probe only runs once the direct-client policy lock is lifted."""
+
+
 @pytest.mark.asyncio
-async def test_probe_ollama_tags_success() -> None:
+async def test_probe_ollama_tags_success(_probe_unlocked: None) -> None:
     """Successful /api/tags response returns list of model name strings."""
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
@@ -47,7 +53,7 @@ async def test_probe_ollama_tags_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_probe_ollama_tags_timeout() -> None:
+async def test_probe_ollama_tags_timeout(_probe_unlocked: None) -> None:
     """httpx.TimeoutException returns ([], message) mentioning the timeout."""
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(side_effect=httpx.TimeoutException("timed out"))
@@ -63,7 +69,7 @@ async def test_probe_ollama_tags_timeout() -> None:
 
 
 @pytest.mark.asyncio
-async def test_probe_ollama_tags_connect_error() -> None:
+async def test_probe_ollama_tags_connect_error(_probe_unlocked: None) -> None:
     """httpx.ConnectError returns ([], message) mentioning connection failure."""
     mock_client = AsyncMock()
     mock_client.get = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
@@ -79,7 +85,7 @@ async def test_probe_ollama_tags_connect_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_probe_ollama_tags_http_status_error() -> None:
+async def test_probe_ollama_tags_http_status_error(_probe_unlocked: None) -> None:
     """httpx.HTTPStatusError returns ([], message) containing the HTTP status code."""
     mock_response = MagicMock()
     mock_response.status_code = 503
@@ -104,7 +110,9 @@ async def test_probe_ollama_tags_http_status_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_probe_ollama_tags_generic_exception_logs_and_returns_generic() -> None:
+async def test_probe_ollama_tags_generic_exception_logs_and_returns_generic(
+    _probe_unlocked: None,
+) -> None:
     """Generic Exception logs the error server-side and returns a generic string.
 
     The raw exception message must NOT appear in the returned error string
@@ -135,3 +143,13 @@ async def test_probe_ollama_tags_generic_exception_logs_and_returns_generic() ->
     logged = mock_log.error.call_args
     assert secret_detail not in str(logged)
     assert logged.kwargs.get("error") == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_probe_is_refused_without_connecting_while_locked() -> None:
+    with (
+        patch("roboco.services.llm.httpx.AsyncClient") as client,
+        pytest.raises(FeatureUnavailableError),
+    ):
+        await probe_ollama_tags(_BASE_URL)
+    client.assert_not_called()

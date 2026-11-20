@@ -26,10 +26,10 @@ import httpx
 from roboco.config import settings
 from roboco.foundation import identity as _foundation
 from roboco.foundation.policy.content import markers
-from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models.base import Complexity, TaskNature, TaskStatus, TaskType, Team
 from roboco.services.base import BaseService
 from roboco.services.company_goals import get_company_goals_service
+from roboco.services.direct_clients import require_direct_model_clients
 from roboco.services.heartbeat_mutex import HeartbeatLockUnavailable, HeartbeatMutex
 from roboco.services.notification_delivery import get_notification_delivery_service
 from roboco.services.project import get_project_service

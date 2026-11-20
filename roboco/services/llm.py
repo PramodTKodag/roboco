@@ -88,6 +88,7 @@ from roboco.models.llm_catalog import (
 )
 from roboco.models.runtime import MODEL_MAP, ROLE_MODEL_MAP
 from roboco.services.base import BaseService, NotFoundError
+from roboco.services.direct_clients import require_direct_model_clients
 from roboco.services.provider import ProviderService, ProviderUpdate
 from roboco.utils.converters import require_uuid
 from roboco.utils.crypto import EncryptionError
@@ -149,11 +150,15 @@ async def probe_ollama_tags(base_url: str) -> tuple[list[str], str | None]:
     """Fetch the model list from a running Ollama server.
 
     Hits ``{base_url}/api/tags`` and returns ``(model_names, None)`` on
-    success or ``([], error_message)`` on any failure. Never raises.
+    success or ``([], error_message)`` on any failure. Raises
+    ``FeatureUnavailableError`` before any connection when the policy keeps
+    direct model clients off, so the controller never opens a socket to an
+    operator-supplied URL.
 
     Returns:
         A tuple of (list_of_model_name_strings, error_string_or_None).
     """
+    require_direct_model_clients()
     url = base_url.rstrip("/") + "/api/tags"
     try:
         async with httpx.AsyncClient(timeout=_OLLAMA_TAGS_TIMEOUT) as client:

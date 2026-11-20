@@ -7,7 +7,6 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-
 from roboco.runtime.engines.chat_turns import (
     INTAKE_VERBS,
     MAX_TRANSCRIPT_BYTES,

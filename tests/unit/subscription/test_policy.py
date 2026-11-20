@@ -25,7 +25,7 @@ def test_clean_configuration_is_accepted() -> None:
 def test_api_key_setting_is_rejected_without_echoing_its_value() -> None:
     with pytest.raises(SubscriptionPolicyViolation) as caught:
         validate_subscription_policy(
-            _settings(anthropic_api_key=SECRET_VALUE), environ={}
+            _settings(), environ={"ROBOCO_ANTHROPIC_API_KEY": SECRET_VALUE}
         )
     assert caught.value.violations == ("ROBOCO_ANTHROPIC_API_KEY",)
     assert SECRET_VALUE not in str(caught.value)
@@ -64,10 +64,14 @@ def test_inherited_auth_or_provider_override_is_rejected_by_name_only(
 def test_every_violation_is_reported_in_stable_order() -> None:
     with pytest.raises(SubscriptionPolicyViolation) as caught:
         validate_subscription_policy(
-            _settings(anthropic_api_key=SECRET_VALUE),
-            environ={"ANTHROPIC_BASE_URL": "https://gw.example", "A": "b"},
+            _settings(),
+            environ={
+                "ROBOCO_ANTHROPIC_API_KEY": SECRET_VALUE,
+                "ANTHROPIC_BASE_URL": "https://gw.example",
+                "A": "b",
+            },
         )
-    assert caught.value.violations == ("ROBOCO_ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL")
+    assert caught.value.violations == ("ANTHROPIC_BASE_URL", "ROBOCO_ANTHROPIC_API_KEY")
 
 
 @pytest.mark.parametrize("flag", ["token_factory_sandboxes_enabled"])

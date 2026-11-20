@@ -15,8 +15,10 @@ from fastapi import HTTPException
 from roboco.api.routes import research as research_route
 from roboco.api.schemas.research import FetchRequest, SearchRequest
 from roboco.api.utils import research as research_utils
+from roboco.config import settings
 from roboco.models import AgentRole
 from roboco.models.permissions import AgentContext
+from roboco.services.base import FeatureUnavailableError
 from roboco.services.research import (
     FetchOutcome,
     ResearchError,
@@ -25,6 +27,12 @@ from roboco.services.research import (
     SearchOutcome,
 )
 from roboco.services.research_quota import QuotaStatus
+
+
+@pytest.fixture(autouse=True)
+def _research_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The policy lock is lifted in-process; the locked case is tested below."""
+    monkeypatch.setattr(settings, "research_enabled", True)
 
 
 def _agent(role: AgentRole) -> AgentContext:
@@ -149,3 +157,25 @@ async def test_fetch_success(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert resp.content == "body"
     assert resp.provider == "exa"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["search", "fetch"])
+async def test_locked_research_is_refused_before_any_provider_call(
+    monkeypatch: pytest.MonkeyPatch, route: str
+) -> None:
+    monkeypatch.setattr(settings, "research_enabled", False)
+
+    def _must_not_build() -> _FakeService:
+        raise AssertionError("a provider was built while research is locked")
+
+    monkeypatch.setattr(research_route, "get_research_service", _must_not_build)
+    ceo = _agent(AgentRole.CEO)
+    with pytest.raises(FeatureUnavailableError) as exc:
+        if route == "search":
+            await research_route.research_search(SearchRequest(query="x"), ceo)
+        else:
+            await research_route.research_fetch(
+                FetchRequest(url="https://example.com"), ceo
+            )
+    assert exc.value.details["code"] == "feature_unavailable"

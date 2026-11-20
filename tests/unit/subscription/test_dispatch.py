@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-
 from roboco.agents_config import verify_run_token
 from roboco.api.run_scope import ActiveRuns
 from roboco.runtime.engines.subscription_dispatch import (

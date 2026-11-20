@@ -21,7 +21,6 @@ from uuid import UUID
 
 import structlog
 
-from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models.optimal import (
     IndexDecisionParams,
     IndexErrorParams,
@@ -34,6 +33,7 @@ from roboco.models.optimal import (
     SearchOutcome,
     SearchResult,
 )
+from roboco.services.direct_clients import require_direct_model_clients
 from roboco.services.optimal_brain.availability import require_semantic_kb
 from roboco.services.optimal_brain.indexes import (
     BaseIndexPlugin,

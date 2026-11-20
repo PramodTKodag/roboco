@@ -9,7 +9,10 @@ from fastapi import HTTPException, status
 from roboco.api.deps import CurrentAgentContext
 from roboco.config import settings
 from roboco.models import AgentRole
+from roboco.services.base import FeatureUnavailableError
 from roboco.services.research_quota import ResearchQuotaTracker
+
+RESEARCH_FEATURE = "web_research"
 
 # Board (Product Owner + Head of Marketing) and PMs research the market; the
 # CEO is included so the operator can drive the same surface from the panel.
@@ -25,6 +28,20 @@ RESEARCH_ROLES = frozenset(
 
 # Module-level so the Redis client is pooled across requests.
 _quota_tracker = ResearchQuotaTracker()
+
+
+def require_research_enabled() -> None:
+    """Refuse every research route while the policy keeps web research off.
+
+    Search and fetch send queries and URLs to a third-party service, which the
+    subscription-only policy does not allow; nothing here may fall back to an
+    empty result.
+    """
+    if not settings.research_enabled:
+        raise FeatureUnavailableError(
+            RESEARCH_FEATURE,
+            "web research is disabled by the subscription-only policy",
+        )
 
 
 def require_research_role(agent: CurrentAgentContext) -> None:

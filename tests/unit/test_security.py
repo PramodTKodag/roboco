@@ -416,69 +416,13 @@ def test_build_security_config_redacts_secret_body_fields_in_guard_logs() -> Non
         assert field in cfg.log_sensitive_body_fields
 
 
-# --- agent_sensitive_headers: telemetry payloads never carry auth material -
+# --- no telemetry sender: nothing leaves the box ---------------------------
 
 
-def test_agent_kwargs_empty_when_telemetry_off() -> None:
-    assert security._agent_kwargs() == {}
-
-
-def test_agent_kwargs_empty_when_armed_without_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The NAS compose ships telemetry armed with an empty key: guard-core
-    rejects enable_agent without agent_api_key at construction, so the kwargs
-    must stay empty and the import-time config must still build."""
-    monkeypatch.setattr(settings, "guard_telemetry_enabled", True)
-    monkeypatch.setattr(settings, "guard_agent_api_key", "")
-    assert security._agent_kwargs() == {}
-    assert security.build_security_config().enable_agent is False
-
-
-def test_agent_sensitive_headers_present_when_telemetry_armed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(settings, "guard_telemetry_enabled", True)
-    monkeypatch.setattr(settings, "guard_agent_api_key", "k")
-    kwargs = security._agent_kwargs()
-    assert kwargs["agent_sensitive_headers"] == [
-        "x-agent-token",
-        "authorization",
-        "cookie",
-        "x-api-key",
-    ]
-
-
-def test_agent_kwargs_dynamic_rules_cache_path_follows_setting(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """guard-core 3.17.0 file snapshot: unset = redis only (None), set = path."""
-    monkeypatch.setattr(settings, "guard_telemetry_enabled", True)
-    monkeypatch.setattr(settings, "guard_agent_api_key", "k")
-    assert security._agent_kwargs()["dynamic_rules_cache_path"] is None
-    monkeypatch.setattr(
-        settings, "guard_dynamic_rules_cache_path", "/data/logs/guard-rules.json"
-    )
-    assert (
-        security._agent_kwargs()["dynamic_rules_cache_path"]
-        == "/data/logs/guard-rules.json"
-    )
-
-
-def test_security_config_builds_when_telemetry_armed_with_key(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Armed + keyed telemetry builds at import (guard-core's validators
-    accept the kwargs) and the 3.17.0 cache path is coerced to a Path."""
-    monkeypatch.setattr(settings, "guard_telemetry_enabled", True)
-    monkeypatch.setattr(settings, "guard_agent_api_key", "k")
-    monkeypatch.setattr(settings, "guard_project_id", "p")
-    monkeypatch.setattr(
-        settings, "guard_dynamic_rules_cache_path", "/data/logs/guard-rules.json"
-    )
+def test_security_config_never_enables_a_telemetry_agent() -> None:
     cfg = security.build_security_config()
-    assert cfg.enable_dynamic_rules
-    assert str(cfg.dynamic_rules_cache_path) == "/data/logs/guard-rules.json"
+    assert cfg.enable_agent is False
+    assert cfg.enable_dynamic_rules is False
 
 
 def test_rate_limit_auto_ban_armed() -> None:

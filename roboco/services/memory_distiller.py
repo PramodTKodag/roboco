@@ -15,7 +15,7 @@ import httpx
 import structlog
 
 from roboco.config import settings
-from roboco.llm.direct_clients import require_direct_model_clients
+from roboco.services.direct_clients import require_direct_model_clients
 
 logger = structlog.get_logger()
 

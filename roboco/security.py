@@ -844,37 +844,6 @@ def _emergency_whitelist() -> list[str]:
     return ["127.0.0.1", "::1", *extra]
 
 
-def _agent_kwargs() -> dict[str, Any]:
-    """guard-agent telemetry kwargs: empty unless telemetry is armed AND keyed.
-
-    guard-core refuses ``enable_agent=True`` without ``agent_api_key`` at
-    construction, and this config is built at import, so an armed flag with
-    no key must leave the agent unconfigured rather than crash boot.
-    """
-    if not (settings.guard_telemetry_enabled and settings.guard_agent_api_key):
-        return {}
-    return {
-        "enable_agent": True,
-        "agent_api_key": settings.guard_agent_api_key,
-        "agent_project_id": settings.guard_project_id or None,
-        "agent_endpoint": "https://api.guard-core.com",
-        "agent_enable_events": True,
-        "agent_enable_metrics": True,
-        "agent_strict": False,
-        "enable_dynamic_rules": True,
-        # Last-known rules snapshot (guard-core 4.0.0): redis first, this file
-        # only when redis has nothing usable. Unset = redis only.
-        "dynamic_rules_cache_path": settings.guard_dynamic_rules_cache_path or None,
-        # HMAC/session material must never leave in a telemetry payload.
-        "agent_sensitive_headers": [
-            "x-agent-token",
-            "authorization",
-            "cookie",
-            "x-api-key",
-        ],
-    }
-
-
 def build_security_config() -> SecurityConfig:
     """Assemble roboco's global guard config from settings (behind nginx)."""
     return SecurityConfig(
@@ -956,7 +925,6 @@ def build_security_config() -> SecurityConfig:
         log_sensitive_body_fields=_LOG_SENSITIVE_BODY_FIELDS,
         # roboco keeps its own CORSMiddleware (single origin via nginx).
         enable_cors=False,
-        **_agent_kwargs(),
     )
 
 
@@ -1124,7 +1092,6 @@ def apply_guard(app: FastAPI) -> None:
             "fastapi-guard armed",
             passive=settings.guard_passive_mode,
             fail_secure=settings.guard_fail_secure,
-            telemetry=settings.guard_telemetry_enabled,
         )
     except Exception as exc:  # pragma: no cover - defensive boot guard
         logger.error("failed to arm fastapi-guard", error=str(exc))

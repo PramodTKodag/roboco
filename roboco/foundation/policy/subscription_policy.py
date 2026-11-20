@@ -58,6 +58,7 @@ FORBIDDEN_ENV_PREFIXES: tuple[str, ...] = (
 FORBIDDEN_ENV_NAMES: frozenset[str] = frozenset(
     {
         "CLAUDE_AUTH_DIR",
+        "ROBOCO_ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "OPENROUTER_API_KEY",
         "GEMINI_API_KEY",
@@ -89,7 +90,6 @@ FORBIDDEN_FEATURE_FLAGS: tuple[str, ...] = (
     # third-party services
     "research_enabled",
     "provisioning_enabled",
-    "guard_telemetry_enabled",
     "x_engine_enabled",
     "x_replies_enabled",
     "x_feature_spotlight_enabled",

@@ -404,7 +404,7 @@ Start by:
         rather than parking forever.
         """
         p = provider.lower()
-        if p.startswith("ollama"):
+        if p.startswith("ollama") and settings.direct_model_clients_enabled:
             return f"{settings.ollama_base_url.rstrip('/')}/api/tags", {}
         return None, {}
 

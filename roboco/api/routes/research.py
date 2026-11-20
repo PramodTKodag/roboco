@@ -17,6 +17,9 @@ from roboco.api.schemas.research import (
     SearchResultItem,
 )
 from roboco.api.utils.research import enforce_quota as _enforce_quota
+from roboco.api.utils.research import (
+    require_research_enabled as _require_research_enabled,
+)
 from roboco.api.utils.research import require_research_role as _require_research_role
 from roboco.security import (
     guard_deco,
@@ -42,6 +45,7 @@ async def research_search(
     data: SearchRequest, agent: CurrentAgentContext
 ) -> SearchResponse:
     """Search the public web via the configured provider (Board + PM only)."""
+    _require_research_enabled()
     _require_research_role(agent)
     await _enforce_quota(agent)
     service = get_research_service()
@@ -80,6 +84,7 @@ async def research_fetch(
     data: FetchRequest, agent: CurrentAgentContext
 ) -> FetchResponse:
     """Extract readable content for a URL via the provider (Board + PM only)."""
+    _require_research_enabled()
     _require_research_role(agent)
     await _enforce_quota(agent)
     service = get_research_service()

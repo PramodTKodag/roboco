@@ -97,9 +97,9 @@ from roboco.agents_config import get_agent_role, get_agent_team
 from roboco.config import settings
 from roboco.eval.fixtures import FIXTURES, BenchTaskSpec
 from roboco.foundation import identity as _foundation
-from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models import Team
 from roboco.models.base import Complexity, TaskType
+from roboco.services.direct_clients import require_direct_model_clients
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Sequence

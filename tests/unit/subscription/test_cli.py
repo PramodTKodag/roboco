@@ -7,7 +7,6 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
-
 from roboco.runtime.subscription.cli import (
     GATEWAY_SOCKET_ENV,
     RUN_CAPABILITY_ENV,

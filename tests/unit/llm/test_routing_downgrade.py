@@ -11,12 +11,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from roboco.models.base import AssignmentScope, ModelProvider
-from roboco.utils.crypto import EncryptionError
 from roboco.services.llm import (
     ModelRoutingService,
     ProviderRoutingError,
     _ResolvedAssignment,
 )
+from roboco.utils.crypto import EncryptionError
 
 _AGENT_SLUG = "be-dev-1"
 

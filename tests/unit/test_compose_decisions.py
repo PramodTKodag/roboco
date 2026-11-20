@@ -130,18 +130,18 @@ def test_sidecar_resolver_url_points_at_container() -> None:
         ), f"{name}: the cheap Laya tier is the built-in fallback and must default ON"
 
 
-def test_pilot_arming_masters_are_split_nas_vs_registry() -> None:
-    """Arming posture (CEO decision 2026-09-23): the NAS/dev build compose
-    ships the master flag ON with a MIX of pilot modes (cheap-failure and
-    advisory pilots ON, expensive-wrong-answer pilots SHADOW); the
-    user-facing registry compose ships everything OFF - nothing serves a
-    verdict there until the CEO arms pilots from the panel."""
+def test_pilot_arming_masters_are_off_in_both_composes() -> None:
+    """Arming posture under the subscription-only policy: the Decisions
+    sidecar calls a model server outside the subscription runtime, so both the
+    build and the registry compose ship the master flag OFF and the policy
+    refuses to start with it on. The pilot mode lists stay declared so a
+    future re-enable only flips the master."""
     build_env = _load(_BUILD_COMPOSE)["x-orchestrator-env"]
     registry_env = _load(_REGISTRY_COMPOSE)["x-orchestrator-env"]
 
     assert build_env.get("ROBOCO_DECISIONS_ENABLED") == (
-        "${ROBOCO_DECISIONS_ENABLED:-true}"
-    ), "docker-compose.yml: the NAS deploy arms the Decisions master flag"
+        "${ROBOCO_DECISIONS_ENABLED:-false}"
+    ), "docker-compose.yml: the policy keeps the Decisions master flag off"
     assert registry_env.get("ROBOCO_DECISIONS_ENABLED") == (
         "${ROBOCO_DECISIONS_ENABLED:-false}"
     ), "docker-compose.registry.yml: user-facing deploys ship decisions OFF"

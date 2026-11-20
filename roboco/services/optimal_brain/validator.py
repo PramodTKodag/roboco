@@ -18,8 +18,8 @@ import httpx
 import structlog
 
 from roboco.config import settings
-from roboco.llm.direct_clients import require_direct_model_clients
 from roboco.models.optimal import SearchResult, ValidationResult
+from roboco.services.direct_clients import require_direct_model_clients
 from roboco.services.exceptions import (
     HTTP_TOO_MANY_REQUESTS,
     MAX_RATE_LIMIT_RETRIES,

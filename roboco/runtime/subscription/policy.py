@@ -44,8 +44,6 @@ def validate_subscription_policy(
     """
     env = os.environ if environ is None else environ
     violations: list[str] = []
-    if settings.anthropic_api_key:
-        violations.append("ROBOCO_ANTHROPIC_API_KEY")
     violations.extend(
         f"ROBOCO_{flag.upper()}"
         for flag in enabled_forbidden_flags(

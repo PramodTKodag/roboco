@@ -314,8 +314,6 @@ class Settings(BaseSettings):
     # ==========================================================================
     # AI/LLM Providers
     # ==========================================================================
-    anthropic_api_key: str | None = None
-
     # Official Claude CLI used for subscription status checks and runs. A
     # trusted operator path (never task-supplied); the personal deployment
     # mounts the pinned, digest-verified binary here read-only.
@@ -1129,32 +1127,6 @@ class Settings(BaseSettings):
             "Detect-and-log without blocking. The calibration switch: turn on "
             "when first arming guard on live traffic to surface false positives "
             "before enforcing, then turn off to enforce. Default off (enforce)."
-        ),
-    )
-    guard_telemetry_enabled: bool = Field(
-        default=False,
-        description=(
-            "Report security events/metrics to a guard-core platform via "
-            "guard-agent. OFF by default; flip on and set guard_agent_api_key + "
-            "guard_project_id to enable. No data leaves the box while off."
-        ),
-    )
-    guard_agent_api_key: str = Field(
-        default="",
-        description="guard-core API key for guard-agent telemetry (telemetry only).",
-    )
-    guard_project_id: str = Field(
-        default="",
-        description="guard-core project id for guard-agent telemetry (telemetry only).",
-    )
-    guard_dynamic_rules_cache_path: str = Field(
-        default="",
-        description=(
-            "Local JSON snapshot of the last-known dynamic rules (guard-core "
-            "4.0.0): a restart during a SaaS or redis outage restores the last "
-            "applied rules instead of base config. Redis is the primary store; "
-            "this file is the fallback. Empty disables the file layer. "
-            "Telemetry only."
         ),
     )
     guard_emergency: bool = Field(

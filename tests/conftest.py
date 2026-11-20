@@ -144,7 +144,6 @@ def _no_inherited_provider_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     for name in forbidden_env_names(os.environ):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(_settings, "anthropic_api_key", None)
 
 
 @pytest.fixture

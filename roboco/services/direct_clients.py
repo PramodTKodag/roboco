@@ -1,4 +1,4 @@
-"""roboco/llm/direct_clients.py
+"""roboco/services/direct_clients.py
 
 The one gate in front of every direct model client (an OpenAI-compatible chat
 endpoint called by the controller itself). Model work runs through the trusted
