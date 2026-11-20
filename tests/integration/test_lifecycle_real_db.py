@@ -39,6 +39,7 @@ from roboco.models.base import (
 from roboco.seeds.initial_data import AGENT_UUIDS
 from roboco.services.base import UnauthorizedError
 from roboco.services.gateway.choreographer import Choreographer, ChoreographerDeps
+from roboco.services.gateway.quality_gate import GateResult
 from roboco.services.task import TaskService
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -132,6 +133,11 @@ class _StubGit:
             "insertions": 1,
             "deletions": 0,
         }
+
+    async def run_pre_submit_quality_gate(self, task: Any) -> GateResult:
+        """The project configures no fast gate in this chain: explicit skip."""
+        del task
+        return GateResult(passed=True, skipped=True)
 
     async def push_branch(
         self, branch_name: str, *, actor_agent_id: Any = None

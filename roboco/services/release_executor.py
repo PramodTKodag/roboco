@@ -1,12 +1,12 @@
 """Release executor — prepares, gates, and publishes a release post-approval.
 
 Runs ONLY after the CEO approves a proposal. It is fail-closed: a red
-``make quality`` aborts before any commit, and a red release-commit CI aborts
+head-rung CI aborts before any commit, and a red release-commit CI aborts
 before any publish. Idempotent: re-running an already-published version is a
 no-op. The bump/gate/commit/publish steps live behind a ``ReleaseOps`` seam so
 the fail-closed ORDERING (the correctness this feature exists to guarantee) is
 unit-tested deterministically; the production ``_GitReleaseOps`` performs the
-real git / ``make quality`` work on a writable clone and publishes the GitHub
+real git work on a writable clone and publishes the GitHub
 release over REST (the orchestrator image ships no ``gh`` binary).
 """
 
@@ -238,18 +238,17 @@ class ReleaseExecutor:
 
 
 # --------------------------------------------------------------------------- #
-# Production ops — real git / make on a writable clone; publish via REST.
+# Production ops — real git on a writable clone; publish via REST.
 # --------------------------------------------------------------------------- #
 
 _CI_POLL_INTERVAL_SECONDS = 30
 _CI_MAX_POLLS = 80  # ~40 min ceiling
 
-# Subprocess deadlines. A hung git / make would otherwise block the
+# Subprocess deadlines. A hung git would otherwise block the
 # CEO-gated release loop indefinitely. Each is generous enough that a
 # legitimate, slow operation is never wrongly aborted — only a true hang fails
-# closed. Mirrors the quality-gate ``_run_one`` kill-on-timeout idiom.
+# closed.
 _GIT_OP_TIMEOUT_SECONDS = 300  # git add/commit/rev-parse/ls-remote/push
-_RELEASE_GATE_TIMEOUT_SECONDS = 1800  # make quality — full ruff/mypy/pytest suite
 _PUBLISH_TIMEOUT_SECONDS = 300  # GitHub release POST (httpx client timeout)
 _CLONE_TIMEOUT_SECONDS = 600  # git clone / rm -rf the release clone
 
@@ -280,8 +279,7 @@ async def _await_proc(
     except asyncio.CancelledError:
         # An outer cancellation (e.g. the release loop's own task being
         # cancelled mid-op) throws in here instead of the TimeoutError above —
-        # same orphaned child + leaked FDs if left unkilled. Mirrors
-        # quality_gate.py's ``_run_one`` handler for the identical shape.
+        # same orphaned child + leaked FDs if left unkilled.
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         await proc.wait()

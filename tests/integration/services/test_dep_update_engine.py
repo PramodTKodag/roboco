@@ -1,56 +1,27 @@
-"""DepUpdateEngine — open an update-deps task per opted-in project with updates.
+"""DepUpdateEngine against a real session.
 
-Opens a PENDING dep_update task (never merges/approves) when the probe reports
-updates; skips projects with no command, no updates, or an already-open task for
-the same repo (git_url dedupe); honours per-cycle + rolling caps; dormant when
-disabled.
+No upgrade probe exists (it needs a package manager and a registry, which neither
+the controller nor the offline worker may use), so an enabled engine originates
+nothing; a disabled engine is a no-op.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
 from roboco.config import settings
 from roboco.db.tables import AgentTable, ProjectTable
 from roboco.foundation import identity as _foundation
-from roboco.models.base import AgentRole, AgentStatus, TaskStatus, Team
+from roboco.models.base import AgentRole, AgentStatus, Team
 from roboco.services.dep_update_engine import get_dep_update_engine
-from roboco.services.task import DEP_UPDATE_SOURCE
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 SYSTEM_UUID = _foundation.AGENTS["system"].uuid
 MAIN_PM_UUID = _foundation.AGENTS["main-pm"].uuid
-
-
-class _FakeWorkspace:
-    def __init__(self, updates: bool = True) -> None:
-        self._updates = updates
-
-    async def dry_upgrade_changes_lockfile(self, _project: Any) -> bool:
-        return self._updates
-
-
-class _ProbeRecordingWorkspace:
-    """Records whether ``db`` held an open transaction when the probe ran.
-
-    2026-07-29 pool-exhaustion regression guard: the probe below stands in
-    for a real git clone + package-manager invocation (2-25 minutes) - the
-    longest single connection hold of any background loop. run_cycle must
-    release the pool connection before calling this, not hold it open.
-    """
-
-    def __init__(self, db: AsyncSession, updates: bool = True) -> None:
-        self._db = db
-        self._updates = updates
-        self.in_transaction_at_probe: list[bool] = []
-
-    async def dry_upgrade_changes_lockfile(self, _project: Any) -> bool:
-        self.in_transaction_at_probe.append(self._db.in_transaction())
-        return self._updates
 
 
 async def _get_or_create_agent(
@@ -102,72 +73,11 @@ async def _enabled(db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
-async def test_updates_available_opens_one_task(db_session: AsyncSession) -> None:
-    proj = await _seed_project(db_session, "dep-a", "https://github.com/x/a.git")
-    engine = get_dep_update_engine(db_session, workspace=_FakeWorkspace(updates=True))
-
-    created = await engine.run_cycle([proj])
-
-    assert len(created) == 1
-    task = created[0]
-    assert task.project_id == proj.id
-    assert task.source == DEP_UPDATE_SOURCE
-    assert task.confirmed_by_human is True
-    assert task.status == TaskStatus.PENDING
-
-
-@pytest.mark.asyncio
-async def test_no_command_skipped(db_session: AsyncSession) -> None:
-    proj = await _seed_project(
-        db_session, "dep-b", "https://github.com/x/b.git", command=None
-    )
-    engine = get_dep_update_engine(db_session, workspace=_FakeWorkspace(updates=True))
-    assert await engine.run_cycle([proj]) == []
-
-
-@pytest.mark.asyncio
-async def test_no_updates_skipped(db_session: AsyncSession) -> None:
-    proj = await _seed_project(db_session, "dep-c", "https://github.com/x/c.git")
-    engine = get_dep_update_engine(db_session, workspace=_FakeWorkspace(updates=False))
-    assert await engine.run_cycle([proj]) == []
-
-
-@pytest.mark.asyncio
-async def test_dedupe_same_repo(db_session: AsyncSession) -> None:
-    proj = await _seed_project(db_session, "dep-d", "https://github.com/x/d.git")
-    engine = get_dep_update_engine(db_session, workspace=_FakeWorkspace(updates=True))
-    first = await engine.run_cycle([proj])
-    assert len(first) == 1
-    second = await engine.run_cycle([proj])  # still updatable, but already open
-    assert second == []
-
-
-@pytest.mark.asyncio
-async def test_per_cycle_cap(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(settings, "dep_update_max_per_cycle", 1)
-    p1 = await _seed_project(db_session, "dep-e", "https://github.com/x/e.git")
-    p2 = await _seed_project(db_session, "dep-f", "https://github.com/x/f.git")
-    engine = get_dep_update_engine(db_session, workspace=_FakeWorkspace(updates=True))
-    created = await engine.run_cycle([p1, p2])
-    assert len(created) == 1
-
-
-@pytest.mark.asyncio
-async def test_probe_runs_with_pool_connection_released(
+async def test_enabled_engine_originates_nothing_without_an_upgrade_probe(
     db_session: AsyncSession,
 ) -> None:
-    """2026-07-29 pool-exhaustion regression: the earlier open-task read must
-    not still be holding a checked-out connection when the (real-world:
-    minutes-long) per-project probe runs."""
-    proj = await _seed_project(db_session, "dep-h", "https://github.com/x/h.git")
-    workspace = _ProbeRecordingWorkspace(db_session, updates=True)
-    engine = get_dep_update_engine(db_session, workspace=workspace)
-
-    await engine.run_cycle([proj])
-
-    assert workspace.in_transaction_at_probe == [False]
+    proj = await _seed_project(db_session, "dep-a", "https://github.com/x/a.git")
+    assert await get_dep_update_engine(db_session).run_cycle([proj]) == []
 
 
 @pytest.mark.asyncio
@@ -176,5 +86,4 @@ async def test_disabled_is_noop(
 ) -> None:
     monkeypatch.setattr(settings, "dep_update_enabled", False)
     proj = await _seed_project(db_session, "dep-g", "https://github.com/x/g.git")
-    engine = get_dep_update_engine(db_session, workspace=_FakeWorkspace(updates=True))
-    assert await engine.run_cycle([proj]) == []
+    assert await get_dep_update_engine(db_session).run_cycle([proj]) == []

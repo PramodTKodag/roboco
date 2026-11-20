@@ -187,8 +187,7 @@ class Settings(BaseSettings):
     # up instead of camping on a pool slot. 0 disables (Postgres semantics).
     # The idle default MUST clear the longest legitimate in-transaction
     # window: a cold-workspace claim holds its transaction across the clone
-    # (workspace_clone_timeout, 300s) + dep install
-    # (workspace_dep_install_timeout_seconds, 600s) under the 900s
+    # (workspace_clone_timeout, 300s) under the 900s
     # flow_verb_slow_timeout_seconds wall — hence 20 min, not tighter.
     database_idle_in_transaction_timeout_ms: int = Field(
         default=1_200_000,
@@ -1940,29 +1939,6 @@ class Settings(BaseSettings):
             "ensure_workspace. Refresh fetches transfer small deltas only "
             "— blocking 300s (the full-clone timeout) on every spawn "
             "against a hung remote is operationally bad."
-        ),
-    )
-    workspace_install_dev_deps: bool = Field(
-        default=True,
-        description=(
-            "After cloning an agent workspace, install the project's dev "
-            "dependencies into the workspace's own environment so the "
-            "`make quality` gate (ruff/mypy/pytest for Python, the lint/"
-            "typecheck toolchain for the TS panel) is available without "
-            "the agent re-downloading tooling per task. Detects Python "
-            "(pyproject.toml → `uv sync`) and Node/TS (package.json → "
-            "`pnpm install`/`npm install`). Idempotent; skipped when the "
-            "relevant lockfile is unchanged since the last install."
-        ),
-    )
-    workspace_dep_install_timeout_seconds: int = Field(
-        default=600,
-        ge=30,
-        description=(
-            "Timeout in seconds for the post-clone dev-dependency install "
-            "(`uv sync` / `pnpm install`). Cold installs of a large TS "
-            "panel or a Python project with native wheels can take several "
-            "minutes; the default clone timeout is too short for this."
         ),
     )
 

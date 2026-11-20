@@ -3,7 +3,7 @@
 Before this guard, ``pr_pass`` had no CI-status check at all — a reviewer could
 pass an assembled PR whose CI was red, still running, or not yet scheduled.
 ``_ci_status_guard`` (wired into ``_pr_pass_blocked`` alongside the existing
-toolchain/conventions guards) reads ``GitService.get_pr_ci_status`` and blocks
+conventions guard) reads ``GitService.get_pr_ci_status`` and blocks
 on failure/pending/pending_not_scheduled/error; only ``failure`` remediates
 via ``pr_fail`` (never ``i_am_blocked`` — a reviewer has no such verb) — the
 ``error`` state is a transient GitHub API lookup failure and remediates via

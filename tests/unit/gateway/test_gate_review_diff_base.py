@@ -199,7 +199,6 @@ class TestPrPassBlockedThreadsParent:
         )
         c = _make_choreographer(task_service=task_service, git=AsyncMock())
         cc: Any = c
-        cc._toolchain_broken_guard = AsyncMock(return_value=None)
         cc._conventions_guard = AsyncMock(return_value=None)
         reviewer_id = uuid4()
 
@@ -227,7 +226,6 @@ class TestPrPassBlockedThreadsParent:
         task_service = AsyncMock()
         c = _make_choreographer(task_service=task_service, git=AsyncMock())
         cc: Any = c
-        cc._toolchain_broken_guard = AsyncMock(return_value=None)
         cc._conventions_guard = AsyncMock(return_value=None)
 
         rejection, _ci_note = await c._pr_pass_blocked(

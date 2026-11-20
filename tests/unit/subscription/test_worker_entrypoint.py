@@ -155,3 +155,62 @@ async def test_stdio_rejects_invalid_jobs_without_running_anything(
     payload = json.loads(stdout.getvalue())
     assert payload["reason_code"] == "job_invalid"
     assert payload["exit_code"] is None
+
+
+def _conventions_job(files: list[str]) -> WorkerJob:
+    return WorkerJob(
+        job_id=uuid4(),
+        run_id=uuid4(),
+        project_id=uuid4(),
+        workspace_handle=uuid4(),
+        operation=WorkerOperation.CHECK_CONVENTIONS,
+        payload={"operation": "check_conventions", "files": files},  # type: ignore[arg-type]
+    )
+
+
+def _seed_router_model(root: Path) -> None:
+    routers = root / "app" / "routers"
+    routers.mkdir(parents=True)
+    (routers / "u.py").write_text(
+        "from pydantic import BaseModel\nclass M(BaseModel):\n    x: int\n"
+    )
+    (root / ".roboco").mkdir()
+    (root / ".roboco" / "conventions.yml").write_text(
+        "modules:\n  - path: app/routers\n    purpose: r\n    forbidden: [model]\n"
+    )
+
+
+async def test_check_conventions_returns_findings_as_json_lines(
+    tmp_path: Path,
+) -> None:
+    _seed_router_model(tmp_path)
+    result = await execute_job(_conventions_job(["app/routers/u.py"]), tmp_path, 30)
+    assert result.exit_code == 0
+    assert result.reason_code is None
+    assert json.loads(result.stdout.splitlines()[0])["rule"] == "no_models_in_routers"
+
+
+async def test_check_conventions_reports_could_not_run_as_exit_three(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".roboco").mkdir()
+    (tmp_path / ".roboco" / "conventions.yml").write_text("modules: [oops\n")
+    result = await execute_job(_conventions_job(["a.py"]), tmp_path, 30)
+    assert result.exit_code == 3  # noqa: PLR2004
+    assert "unparseable" in result.stderr
+    assert result.reason_code is None
+
+
+async def test_check_conventions_never_runs_project_code(tmp_path: Path) -> None:
+    marker = tmp_path / "executed"
+    (tmp_path / "evil.py").write_text(f"open({str(marker)!r}, 'w').write('x')\n")
+    (tmp_path / "conftest.py").write_text(f"open({str(marker)!r}, 'w').write('x')\n")
+    await execute_job(_conventions_job(["evil.py"]), tmp_path, 30)
+    assert not marker.exists()
+
+
+async def test_check_conventions_refuses_a_denied_path(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("TOKEN=synthetic-value\n")
+    result = await execute_job(_conventions_job([".env"]), tmp_path, 30)
+    assert result.reason_code == "path_denied"
+    assert "synthetic-value" not in result.stdout + result.stderr

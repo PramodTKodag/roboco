@@ -1,6 +1,8 @@
 """Write the hash-pinned requirements for the credential-free task-worker image.
 
-The worker imports only the run contracts, so it needs just the packages below.
+The worker imports only the run contracts and the conventions validator, so it
+needs just the packages below (pydantic for the contracts, tree-sitter for the
+validator).
 Versions and hashes come straight from the project's lockfile via ``uv export``;
 nothing is resolved fresh. Usage:
 
@@ -20,7 +22,11 @@ WORKER_PACKAGES = (
     "pydantic-core",
     "pydantic-settings",
     "python-dotenv",
+    "pyyaml",
     "structlog",
+    "tree-sitter",
+    "tree-sitter-python",
+    "tree-sitter-typescript",
     "typing-extensions",
     "typing-inspection",
 )

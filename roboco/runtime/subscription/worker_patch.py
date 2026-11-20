@@ -26,9 +26,10 @@ if TYPE_CHECKING:
 GIT_TIMEOUT_SECONDS = 60
 MAX_GIT_OUTPUT_BYTES = 8 * 1024 * 1024
 _BASELINE_MESSAGE = "workspace baseline"
+_WORKER_HOME = "/tmp"  # nosec B108 - worker container tmpfs, not a host path
 _GIT_ENV = {
     "PATH": "/usr/local/bin:/usr/bin:/bin",
-    "HOME": "/tmp",  # nosec B108 - container tmpfs, not a host path
+    "HOME": _WORKER_HOME,
     "LANG": "C.UTF-8",
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_SYSTEM": "/dev/null",

@@ -27,7 +27,6 @@ from roboco.services.task import (
     TaskService,
     get_task_service,
 )
-from roboco.services.workspace import get_workspace_service
 from roboco.utils.converters import repo_key
 
 if TYPE_CHECKING:
@@ -43,9 +42,8 @@ class DepUpdateEngine(BaseService):
 
     service_name = "dep_update_engine"
 
-    def __init__(self, session: AsyncSession, workspace: Any | None = None) -> None:
+    def __init__(self, session: AsyncSession) -> None:
         super().__init__(session)
-        self._workspace = workspace or get_workspace_service(session)
 
     async def run_cycle(self, projects: list[Any]) -> list[TaskTable]:
         """Probe each opted-in project and open a dep-update task when due (bounded).
@@ -144,9 +142,11 @@ class DepUpdateEngine(BaseService):
         """True when ``project`` has a command, no open task yet, and updates.
 
         Cheap checks first (command set, per-``(repo, command)`` dedupe via the
-        in-memory ``open_keys`` set built once in ``run_cycle``), then the
-        expensive read-only probe — so a project that's already covered or
-        opted out never pays for a clone.
+        in-memory ``open_keys`` set built once in ``run_cycle``). Detecting an
+        upgrade means running the project's package manager against a package
+        registry, which project code may not do on the controller and the
+        network-less worker cannot do. No detection mechanism exists, so no
+        project is ever eligible and the failure is logged, never silent.
         """
         if not str(getattr(project, "dep_update_command", None) or "").strip():
             return False
@@ -158,7 +158,12 @@ class DepUpdateEngine(BaseService):
         )
         if key in open_keys:
             return False
-        return await self._workspace.dry_upgrade_changes_lockfile(project)
+        self.log.error(
+            "dep-update probe unavailable: project code cannot run on the "
+            "controller and the offline worker has no registry access",
+            project=str(getattr(project, "slug", "")),
+        )
+        return False
 
     async def _open_task(self, task_svc: TaskService, project: Any) -> TaskTable:
         slug = str(getattr(project, "slug", "") or "")
@@ -224,8 +229,6 @@ class DepUpdateEngine(BaseService):
         )
 
 
-def get_dep_update_engine(
-    session: AsyncSession, workspace: Any | None = None
-) -> DepUpdateEngine:
-    """Construct a DepUpdateEngine bound to ``session`` (optionally a test probe)."""
-    return DepUpdateEngine(session, workspace=workspace)
+def get_dep_update_engine(session: AsyncSession) -> DepUpdateEngine:
+    """Construct a DepUpdateEngine bound to ``session``."""
+    return DepUpdateEngine(session)

@@ -23,6 +23,7 @@ RUN pip install --require-hashes --no-deps -r /tmp/requirements.txt \
 # Only the import closure of the worker entrypoint (enforced by a test).
 COPY roboco/__init__.py roboco/config.py roboco/exceptions.py roboco/logging.py /opt/worker/roboco/
 COPY roboco/foundation /opt/worker/roboco/foundation
+COPY roboco/conventions /opt/worker/roboco/conventions
 COPY roboco/runtime/__init__.py /opt/worker/roboco/runtime/__init__.py
 COPY roboco/runtime/subscription /opt/worker/roboco/runtime/subscription
 

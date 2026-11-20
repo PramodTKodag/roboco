@@ -1,15 +1,14 @@
-"""DepUpdateEngine — dedupe by (repo, command) + single open-task fetch.
+"""DepUpdateEngine — no upgrade probe exists, so nothing is ever originated.
 
-Two unit tests (no DB): a monorepo with two distinct ``dep_update_command``
-values is not blocked by ``git_url`` alone (one open task per command, not one
-per repo), and ``run_cycle`` fetches the open-task set exactly once regardless
-of project count (the per-project scoped query is gone).
+Detecting an upgrade means running a package manager against a registry. That
+cannot run on the controller (project code) nor in the network-less worker, so the
+engine refuses to originate and says so loudly instead of guessing.
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -17,48 +16,17 @@ import pytest
 from roboco.config import settings
 from roboco.services.dep_update_engine import DepUpdateEngine
 
+if TYPE_CHECKING:
+    from roboco.db.tables import TaskTable
 
-def _project(slug: str, git_url: str, command: str) -> SimpleNamespace:
+
+def _project(slug: str, command: str | None = "uv lock -U") -> SimpleNamespace:
     return SimpleNamespace(
-        id=uuid4(), slug=slug, git_url=git_url, dep_update_command=command
+        id=uuid4(),
+        slug=slug,
+        git_url=f"https://example.invalid/{slug}.git",
+        dep_update_command=command,
     )
-
-
-def _open_task(project: Any) -> SimpleNamespace:
-    # run_cycle reads t.project.git_url / t.project.dep_update_command.
-    return SimpleNamespace(id=uuid4(), project_id=project.id, project=project)
-
-
-class _FakeWorkspace:
-    def __init__(self, updates: bool = True) -> None:
-        self._updates = updates
-
-    async def dry_upgrade_changes_lockfile(self, _project: Any) -> bool:
-        return self._updates
-
-
-def _make_engine(
-    task_svc: Any, workspace: _FakeWorkspace | None = None
-) -> tuple[DepUpdateEngine, list[Any]]:
-    # AsyncMock, not MagicMock: run_cycle now awaits session.commit() to
-    # release the pool connection before each project's probe.
-    session = AsyncMock()
-    engine = DepUpdateEngine(session, workspace=workspace or _FakeWorkspace())
-    patchers = [
-        patch(
-            "roboco.services.dep_update_engine.get_task_service", return_value=task_svc
-        ),
-        # session is a bare MagicMock: is_paused's real settings-store read
-        # would raise on it and fail closed (treats as paused), so run_cycle
-        # would no-op regardless of the scenario under test.
-        patch(
-            "roboco.services.maintenance_pause.is_paused",
-            AsyncMock(return_value=False),
-        ),
-    ]
-    for p in patchers:
-        p.start()
-    return engine, patchers
 
 
 @pytest.fixture
@@ -68,58 +36,48 @@ def _enabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "dep_update_max_open_tasks", 10)
 
 
-@pytest.mark.asyncio
-async def test_dedupe_spared_by_command_not_git_url(_enabled: None) -> None:
-    """A monorepo with two distinct dep_update_command values is not blocked
-    by git_url alone — one open task per command, not one per repo."""
-    git_url = "https://github.com/x/mono.git"
-    p1 = _project("mono-uv", git_url, "uv lock -U")
-    p2 = _project("mono-pnpm", git_url, "pnpm update -L")
-    open_task = _open_task(p1)
+def _engine() -> DepUpdateEngine:
+    engine = DepUpdateEngine(AsyncMock())
+    object.__setattr__(engine, "log", MagicMock())
+    return engine
 
-    task_svc = MagicMock()
-    task_svc.list_open_dep_update_tasks = AsyncMock(return_value=[open_task])
-    task_svc.create = AsyncMock(
-        side_effect=lambda req: SimpleNamespace(id=uuid4(), project_id=req.project_id)
-    )
 
-    engine, patchers = _make_engine(task_svc)
-    try:
-        created = await engine.run_cycle([p1, p2])
-    finally:
-        for p in patchers:
-            p.stop()
-
-    # p1 deduped (open task already covers (mono, "uv lock -U"));
-    # p2 still eligible (different command) -> opened.
-    assert len(created) == 1
-    assert created[0].project_id == p2.id
+async def _run(
+    engine: DepUpdateEngine, task_svc: MagicMock, projects: list[SimpleNamespace]
+) -> list[TaskTable]:
+    with (
+        patch(
+            "roboco.services.dep_update_engine.get_task_service",
+            return_value=task_svc,
+        ),
+        patch(
+            "roboco.services.maintenance_pause.is_paused",
+            AsyncMock(return_value=False),
+        ),
+    ):
+        return await engine.run_cycle(projects)
 
 
 @pytest.mark.asyncio
-async def test_run_cycle_fetches_open_tasks_once(_enabled: None) -> None:
-    """run_cycle fetches the open-task set exactly once regardless of project
-    count — the per-project scoped query is gone."""
-    project_count = 5
-    projects = [
-        _project(f"p{i}", f"https://github.com/x/r{i}.git", f"cmd{i}")
-        for i in range(project_count)
-    ]
-
+async def test_no_task_is_originated_and_the_refusal_is_logged(_enabled: None) -> None:
     task_svc = MagicMock()
     task_svc.list_open_dep_update_tasks = AsyncMock(return_value=[])
-    task_svc.create = AsyncMock(
-        side_effect=lambda req: SimpleNamespace(id=uuid4(), project_id=req.project_id)
-    )
+    task_svc.create = AsyncMock()
+    engine = _engine()
 
-    engine, patchers = _make_engine(task_svc)
-    try:
-        created = await engine.run_cycle(projects)
-    finally:
-        for p in patchers:
-            p.stop()
+    projects = [_project("a"), _project("b")]
+    created = await _run(engine, task_svc, projects)
 
-    assert len(created) == project_count
-    # One fetch for both the cap and the per-(repo, command) dedupe —
-    # not one per project.
-    assert task_svc.list_open_dep_update_tasks.call_count == 1
+    assert created == []
+    task_svc.create.assert_not_awaited()
+    assert engine.log.error.call_count == len(projects)
+
+
+@pytest.mark.asyncio
+async def test_a_project_without_a_command_is_skipped_silently(_enabled: None) -> None:
+    task_svc = MagicMock()
+    task_svc.list_open_dep_update_tasks = AsyncMock(return_value=[])
+    engine = _engine()
+
+    assert await _run(engine, task_svc, [_project("a", command=None)]) == []
+    engine.log.error.assert_not_called()

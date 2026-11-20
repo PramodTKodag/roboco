@@ -147,6 +147,7 @@ class WorkerOperation(StrEnum):
     APPLY_PATCH = "apply_patch"
     RUN_COMMAND = "run_command"
     EXPORT_PATCH = "export_patch"
+    CHECK_CONVENTIONS = "check_conventions"
 
 
 class ReadFilePayload(_Frozen):
@@ -190,6 +191,16 @@ class ExportPatchPayload(_Frozen):
     operation: Literal["export_patch"] = "export_patch"
 
 
+MAX_CONVENTION_FILES = 500
+
+
+class CheckConventionsPayload(_Frozen):
+    """Validate named files against the project's architectural conventions."""
+
+    operation: Literal["check_conventions"] = "check_conventions"
+    files: Annotated[list[RelativePath], Field(max_length=MAX_CONVENTION_FILES)]
+
+
 WorkerPayload = Annotated[
     ReadFilePayload
     | ListFilesPayload
@@ -197,7 +208,8 @@ WorkerPayload = Annotated[
     | WriteFilePayload
     | ApplyPatchPayload
     | RunCommandPayload
-    | ExportPatchPayload,
+    | ExportPatchPayload
+    | CheckConventionsPayload,
     Field(discriminator="operation"),
 ]
 

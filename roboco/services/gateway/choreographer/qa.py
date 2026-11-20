@@ -953,14 +953,6 @@ class QAMixin(_Base):
                 verb="pass_review",
             )
             return rejection, []
-        if toolchain := await self._toolchain_broken_guard(qa_agent_id, t):
-            rejection = await self._emit_rejection(
-                toolchain.with_introspection(task=t, role=role_str),
-                agent_id=qa_agent_id,
-                task_id=task_id,
-                verb="pass_review",
-            )
-            return rejection, []
         return None, pairs
 
     async def pass_review(

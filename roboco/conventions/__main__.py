@@ -14,24 +14,9 @@ import json
 import sys
 from pathlib import Path
 
-from roboco.foundation.policy.conventions.effective_map import effective_map
-from roboco.foundation.policy.conventions.models import (
-    ConventionsParseError,
-    ConventionsStandard,
-)
+from .check import check_files
 
-from .runner import ValidatorCouldNotRun, run
-from .scan import derive_from_scan
-
-_CONVENTIONS_FILE = ".roboco/conventions.yml"
 _EXIT_COULD_NOT_RUN = 3
-
-
-def _load_file(root: Path) -> ConventionsStandard | None:
-    path = root / _CONVENTIONS_FILE
-    if not path.is_file():
-        return None
-    return ConventionsStandard.parse_yaml(path.read_text())
 
 
 def _fail(reason: str) -> int:
@@ -40,17 +25,11 @@ def _fail(reason: str) -> int:
 
 
 def _run_check(root: Path, files: list[str]) -> int:
-    try:
-        file_standard = _load_file(root)
-    except ConventionsParseError as exc:
-        return _fail(f"unparseable {_CONVENTIONS_FILE}: {exc.reason}")
-    standard = effective_map(derive_from_scan(root), file_standard)
-    try:
-        findings = run(root, files, standard)
-    except ValidatorCouldNotRun as exc:
-        return _fail(str(exc))
-    for finding in findings:
-        print(finding.as_json())
+    outcome = check_files(root, files)
+    if outcome.could_not_run_reason is not None:
+        return _fail(outcome.could_not_run_reason)
+    for line in outcome.finding_lines:
+        print(line)
     return 0
 
 

@@ -43,6 +43,7 @@ from roboco.models.work_session import WorkSessionStatus
 from roboco.seeds.initial_data import AGENT_UUIDS
 from roboco.services.gateway.choreographer import Choreographer, ChoreographerDeps
 from roboco.services.gateway.choreographer import findings as findings_lib
+from roboco.services.gateway.quality_gate import GateResult
 from roboco.services.task import TaskService
 
 from tests.integration.conftest import cleanup_project_durable_rows
@@ -119,6 +120,11 @@ class _StubGit:
             "insertions": 1,
             "deletions": 0,
         }
+
+    async def run_pre_submit_quality_gate(self, task: Any) -> GateResult:
+        """The project configures no fast gate in this chain: explicit skip."""
+        del task
+        return GateResult(passed=True, skipped=True)
 
     async def push_branch(
         self, branch_name: str, *, actor_agent_id: Any = None
@@ -248,6 +254,11 @@ class _MultiTaskStubGit:
             "insertions": 1,
             "deletions": 0,
         }
+
+    async def run_pre_submit_quality_gate(self, task: Any) -> GateResult:
+        """The project configures no fast gate in this chain: explicit skip."""
+        del task
+        return GateResult(passed=True, skipped=True)
 
     async def push_branch(
         self, branch_name: str, *, actor_agent_id: Any = None

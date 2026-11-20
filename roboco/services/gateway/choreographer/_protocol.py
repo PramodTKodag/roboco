@@ -56,11 +56,6 @@ class ChoreographerHelpers:
     async def _teardown_sandbox_best_effort(self, agent_id: UUID) -> None:
         raise NotImplementedError
 
-    async def _toolchain_broken_guard(
-        self, agent_id: UUID, task: Any, *, reviewer: bool = False
-    ) -> Envelope | None:
-        raise NotImplementedError
-
     async def _conventions_guard(
         self,
         agent_id: UUID,

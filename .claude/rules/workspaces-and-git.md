@@ -11,7 +11,7 @@ paths:
 
 Migrated from the root CLAUDE.md so it loads only when the matching files are touched.
 
-On a Python workspace, `WorkspaceService` runs `uv sync --extra dev` (not plain `uv sync`) so the clone's `.venv` carries the full gate toolchain (ruff/mypy/xenon/pytest) - the lint/type/complexity tools live in the `dev` **extra**, which plain `uv sync` skips. Without it an agent's `make quality` fails on `ruff: command not found` and the agent can't gate its own work.
+`WorkspaceService` never installs dependencies, builds a venv, or runs any project code on the controller. Project commands (quality gate, conventions check) run only as jobs in the credential-free, network-less offline worker through `roboco/runtime/subscription/project_executor.py`; the worker image carries no project toolchains, so a command whose tool is missing exits 127 and the gate fails with a hint to provide the toolchain as pre-fetched, locked packages. An unavailable worker blocks the submit; it is never read as a pass or a skip.
 
 Because the clone is shared across a dev's tasks, a **fresh claim** git-resets the workspace to a clean tree (`git reset --hard`) before checking out the new task's branch - discarding abandoned uncommitted cruft from a finished task while preserving all commits and the gitignored `.venv`. A resume short-circuits before this, so committed work is never reset.
 

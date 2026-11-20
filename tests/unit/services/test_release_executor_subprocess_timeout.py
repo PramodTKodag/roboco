@@ -22,7 +22,6 @@ from roboco.services.release_executor import (
     _CLONE_TIMEOUT_SECONDS,
     _GIT_OP_TIMEOUT_SECONDS,
     _PUBLISH_TIMEOUT_SECONDS,
-    _RELEASE_GATE_TIMEOUT_SECONDS,
     _TIMEOUT_RC,
     _GitReleaseOps,
     _run,
@@ -33,7 +32,6 @@ if TYPE_CHECKING:
 
 # Floors encoding the logical-regression guard: a deadline below these would
 # silently abort a legitimate slow release. Named (not magic) for ruff PLR2004.
-_MIN_GATE_TIMEOUT = 1800  # full make quality suite — ruff/mypy/pytest
 _MIN_GIT_OP_TIMEOUT = 300  # network push / ls-remote
 _MIN_CLONE_TIMEOUT = 600  # full clone on a slow link
 _MIN_PUBLISH_TIMEOUT = 120  # GitHub release POST (httpx client timeout)
@@ -124,21 +122,11 @@ def test_timeouts_are_named_module_constants() -> None:
     number inline."""
     for c in (
         _GIT_OP_TIMEOUT_SECONDS,
-        _RELEASE_GATE_TIMEOUT_SECONDS,
         _PUBLISH_TIMEOUT_SECONDS,
         _CLONE_TIMEOUT_SECONDS,
     ):
         assert isinstance(c, int | float)
         assert c > 0
-
-
-def test_gate_timeout_is_generous_enough_for_a_full_make_quality() -> None:
-    """``make quality`` runs the full ruff/mypy/pytest suite — a legitimate run
-    can take many minutes. The deadline must be large enough that a healthy
-    release is never aborted; 30 min is consistent with the ~40 min CI poll
-    ceiling. This guards the logical regression: a too-short gate timeout would
-    silently fail-closed a release that would have succeeded."""
-    assert _RELEASE_GATE_TIMEOUT_SECONDS >= _MIN_GATE_TIMEOUT
 
 
 def test_network_op_timeouts_are_generous() -> None:
@@ -343,11 +331,9 @@ async def test_await_proc_kills_child_on_outer_cancellation() -> None:
     """Redis mutex pre-lock write audit sibling finding: an outer cancellation
     (e.g. the release loop's own task being cancelled mid-op) throws
     ``CancelledError`` into ``_await_proc``'s ``wait_for``, bypassing the
-    ``TimeoutError`` handler. Without a dedicated handler (which
-    ``quality_gate.py``'s ``_run_one`` already has) the child is orphaned and
-    keeps running past the cancelled release op. ``_await_proc`` must kill +
-    reap it and re-raise, mirroring the already-shipped ``quality_gate.py``
-    pattern exactly."""
+    ``TimeoutError`` handler. Without a dedicated handler the child is orphaned
+    and keeps running past the cancelled release op. ``_await_proc`` must kill +
+    reap it and re-raise."""
     real_create_subprocess_exec = asyncio.create_subprocess_exec
     spawned: dict[str, asyncio.subprocess.Process] = {}
 

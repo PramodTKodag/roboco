@@ -21,12 +21,14 @@ from uuid import UUID
 
 from pydantic import ValidationError
 
+from roboco.conventions.check import check_files
 from roboco.runtime.subscription.contracts import (
     COMMAND_TIMEOUT_SECONDS,
     IMPORT_MODE_ARGUMENT,
     MAX_IMPORT_REPORT_ITEMS,
     MAX_STREAM_BYTES,
     ApplyPatchPayload,
+    CheckConventionsPayload,
     ExportPatchPayload,
     ImportFinding,
     ImportOptions,
@@ -56,6 +58,10 @@ from roboco.runtime.subscription.worker_patch import (
 from roboco.runtime.subscription.workspace_admission import (
     AdmissionRefused,
     admit_archive,
+)
+from roboco.runtime.subscription.workspace_rules import (
+    InvalidWorkspacePath,
+    is_denied_path,
 )
 
 logger = logging.getLogger("roboco.worker")
@@ -191,6 +197,43 @@ def _file_operation(job: WorkerJob, workspace: Path) -> FileOutput | None:
     return output
 
 
+_COULD_NOT_RUN_EXIT_CODE = 3
+
+
+def _conventions_file_refusal(workspace: Path, files: list[str]) -> str | None:
+    """A reason code when any file is denied, escapes the workspace, or is a link."""
+    root = workspace.resolve()
+    for name in files:
+        try:
+            if is_denied_path(name):
+                return "path_denied"
+        except InvalidWorkspacePath:
+            return "path_invalid"
+        candidate = workspace / name
+        if candidate.is_symlink() or not candidate.resolve().is_relative_to(root):
+            return "symlink_refused"
+    return None
+
+
+def _check_conventions(
+    job: WorkerJob, payload: CheckConventionsPayload, workspace: Path
+) -> WorkerResult:
+    refusal = _conventions_file_refusal(workspace, payload.files)
+    if refusal is not None:
+        return _failure(job.job_id, refusal)
+    outcome = check_files(workspace, payload.files)
+    failed = outcome.could_not_run_reason is not None
+    findings = "\n".join(outcome.finding_lines).encode()
+    return WorkerResult(
+        job_id=job.job_id,
+        exit_code=_COULD_NOT_RUN_EXIT_CODE if failed else 0,
+        stdout=_decode_bounded(findings),
+        stderr=_decode_bounded((outcome.could_not_run_reason or "").encode()),
+        truncated=len(findings) > MAX_STREAM_BYTES,
+        reason_code=None,
+    )
+
+
 async def execute_job(
     job: WorkerJob, workspace: Path, timeout_seconds: float
 ) -> WorkerResult:
@@ -198,6 +241,8 @@ async def execute_job(
     payload = job.payload
     if isinstance(payload, RunCommandPayload):
         return await _run_command(job, payload.command, workspace, timeout_seconds)
+    if isinstance(payload, CheckConventionsPayload):
+        return await asyncio.to_thread(_check_conventions, job, payload, workspace)
     try:
         output = await asyncio.to_thread(_file_operation, job, workspace)
     except WorkspaceFileError as error:

@@ -1,7 +1,7 @@
 """The pr_pass conventions gate: a reviewer can't PASS a PR with block violations.
 
 ``_gate_decision`` runs ``_conventions_guard`` for ``verb == "pr_pass"`` only
-(pr_fail stays available), exactly like the toolchain guard. These exercise the
+(pr_fail stays available). These exercise the
 shared guard the pr_pass path invokes: a ``block`` finding (or a validator that
 could not run) refuses; ``warn`` passes; flag-off is inert.
 """

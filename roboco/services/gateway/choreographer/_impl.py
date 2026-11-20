@@ -30,6 +30,7 @@ from roboco.foundation.policy.content import (
     validate_findings,
 )
 from roboco.foundation.policy.content.validators import reject_trivial
+from roboco.runtime.subscription.project_executor import ProjectExecutionUnavailable
 from roboco.services.base import UnauthorizedError
 from roboco.services.content_notes import apply_structured_note
 from roboco.services.gateway.choreographer import findings as findings_lib
@@ -3073,7 +3074,6 @@ class Choreographer:
             lambda: self._ensure_branch_pushed(ctx),
             lambda: self._behind_base_gate(ctx),
             lambda: self._check_quality_gate(ctx),
-            lambda: self._toolchain_broken_guard(ctx.agent_id, ctx.task),
             lambda: self._conventions_gate(ctx),
         )
         for guard in guards:
@@ -3086,20 +3086,20 @@ class Choreographer:
         return None
 
     async def _check_quality_gate(self, ctx: _IAmDoneContext) -> Envelope | None:
-        """Run the project's fast quality gate (lint + typecheck) in the dev's
-        workspace before the task reaches QA, so a red gate is caught at the
-        dev's desk instead of in QA review or CI. The full test suite stays on
-        CI. Fail-open: a gate-infrastructure error (missing workspace or
-        toolchain) is logged and never blocks the submit; only an actual check
-        failure blocks.
+        """Run the project's fast quality gate (lint + typecheck) in the
+        project's offline worker before the task reaches QA, so a red gate is
+        caught at the dev's desk instead of in QA review or CI. The full test
+        suite stays on CI. Fail-closed: a failing check blocks, and so does a
+        gate that could not run (no worker, cancelled or malformed run) - an
+        unchecked submit is never a pass.
         """
         try:
-            result = await self.git.run_pre_submit_quality_gate(ctx.agent_id, ctx.task)
+            result = await self.git.run_pre_submit_quality_gate(ctx.task)
+        except ProjectExecutionUnavailable as exc:
+            return self._quality_gate_unavailable(ctx, exc.reason_code)
         except Exception as exc:
-            logger.warning(
-                "quality_gate_skipped", task_id=str(ctx.task_id), error=str(exc)
-            )
-            return None
+            logger.exception("quality_gate_error", task_id=str(ctx.task_id))
+            return self._quality_gate_unavailable(ctx, type(exc).__name__)
         if result.passed:
             return None
         return Envelope.invalid_state(
@@ -3111,9 +3111,22 @@ class Choreographer:
             context_briefing=ctx.briefing,
         )
 
-    async def _fast_path_quality_verdict(
-        self, ctx: _IAmDoneContext
-    ) -> tuple[Envelope | None, bool]:
+    @staticmethod
+    def _quality_gate_unavailable(ctx: _IAmDoneContext, reason: str) -> Envelope:
+        logger.warning(
+            "quality_gate_blocked_submit", task_id=str(ctx.task_id), reason=reason
+        )
+        return Envelope.invalid_state(
+            message="quality gate could not run, so the submit is blocked",
+            remediate=(
+                f"The offline worker was unavailable (reason: {reason}). "
+                "Retry i_am_done; if it persists, call i_am_blocked so the "
+                "operator can restore the worker."
+            ),
+            context_briefing=ctx.briefing,
+        )
+
+    async def _fast_path_quality_verdict(self, ctx: _IAmDoneContext) -> Envelope | None:
         """Quality posture for the work-already-done fast path.
 
         Trusts the PR's CI-green signal — the same signal the downstream
@@ -3123,9 +3136,7 @@ class Choreographer:
         signal and runs. A CI ``failure`` is a known-bad build: refuse the fast
         path rather than shipping red, even before the local gate runs.
 
-        Returns ``(rejection|None, ran_local)``. ``ran_local`` lets the caller
-        distinguish "the local gate already decided" from "CI green, gate
-        skipped" so it never double-gates.
+        Returns the rejection envelope, or ``None`` when the fast path may go on.
         """
         # ``_resolve_ci_status`` lives on ``PRGateMixin``; ``_LegacyChoreographer``
         # reaches it via the typed-helpers cast (same idiom as the pr_pass path).
@@ -3135,92 +3146,27 @@ class Choreographer:
         if status is not None:
             state = status.get("state")
             if state == "success":
-                return None, False
+                return None
             if state == "failure":
                 names = (
                     ", ".join(status.get("failing_checks") or [])
                     or "one or more checks"
                 )
-                return (
-                    Envelope.invalid_state(
-                        message=(
-                            f"fast path refused — PR CI is failing ({names}); "
-                            "QA reviews working code, not a red build"
-                        ),
-                        remediate=(
-                            "fix the failing CI checks, commit, and call i_am_done "
-                            "again — or run the standard path (leave "
-                            "possibilities_matrix off)"
-                        ),
-                        context_briefing=ctx.briefing,
+                return Envelope.invalid_state(
+                    message=(
+                        f"fast path refused — PR CI is failing ({names}); "
+                        "QA reviews working code, not a red build"
                     ),
-                    False,
+                    remediate=(
+                        "fix the failing CI checks, commit, and call i_am_done "
+                        "again — or run the standard path (leave "
+                        "possibilities_matrix off)"
+                    ),
+                    context_briefing=ctx.briefing,
                 )
         # No CI signal (no_ci_configured / pending / pending_not_scheduled /
         # error / unresolvable): the local gate is the only signal — run it.
-        return await self._check_quality_gate(ctx), True
-
-    async def _toolchain_broken_guard(
-        self, agent_id: UUID, task: Any, *, reviewer: bool = False
-    ) -> Envelope | None:
-        """Refuse a delivery gate when the acting agent's workspace cannot run
-        the project's suite (interpreter mismatch).
-
-        A role that cannot execute the suite degrades to "verifying by reading
-        source", which the QA + PR-review gates exist to prevent. Inert when the
-        flag is off; only a recorded ``broken`` status blocks — a missing or
-        ``unknown`` status never strands a task (fail-open).
-
-        ``reviewer=True`` for the pr_pass gate: a PR reviewer has no
-        ``i_am_blocked`` verb, so the remediation points at ``pr_fail`` (their
-        reject lever, sending the PR back to needs_revision for the dev to fix
-        the environment) instead of a verb they cannot call.
-        """
-        from roboco.config import settings as _settings
-
-        if not _settings.toolchain_match_enabled:
-            return None
-        status = await self.git.toolchain_status_for_task(agent_id, task)
-        if status == "unknown":
-            # Fail-open (precision over recall) but never silent: a recorded
-            # 'unknown' means provisioning ran yet the smoke could not confirm
-            # the suite is collectable under the interpreter — a possible hollow
-            # pass. Surface it so an operator can see the gate proceeded blind.
-            logger.warning(
-                "toolchain.unverified_gate_pass",
-                agent_id=str(agent_id),
-                task_id=str(getattr(task, "id", "")),
-                detail=(
-                    "gate proceeding past an unverified toolchain — the "
-                    "workspace smoke could not confirm the project's suite is "
-                    "collectable under the provisioned interpreter"
-                ),
-            )
-        if status != "broken":
-            return None
-        if reviewer:
-            remediate = (
-                "the workspace Python does not match the project's requirement, "
-                "so the suite cannot be executed to verify this PR. call "
-                "pr_fail(issues=['toolchain: interpreter mismatch — suite "
-                "cannot run']) so the PR returns to needs_revision and the dev "
-                "rebuilds the environment — do NOT pr_pass on a source read"
-            )
-        else:
-            remediate = (
-                "the workspace Python does not match the project's requirement; "
-                "call i_am_blocked(reason='toolchain') so the environment is "
-                "rebuilt against the right interpreter — do NOT pass on a "
-                "source read"
-            )
-        return Envelope.invalid_state(
-            message=(
-                "the project's test suite cannot be executed in this workspace "
-                "(interpreter mismatch) — verifying by reading source is hollow"
-            ),
-            remediate=remediate,
-            context_briefing={},
-        )
+        return await self._check_quality_gate(ctx)
 
     async def _conventions_gate(self, ctx: _IAmDoneContext) -> Envelope | None:
         """Block i_am_done on unresolved block-level architectural violations.
@@ -3959,13 +3905,7 @@ class Choreographer:
                 ),
                 context_briefing=ctx.briefing,
             )
-        rejection, ran_local = await self._fast_path_quality_verdict(ctx)
-        # The local gate ran (no CI signal) without a toolchain that can
-        # execute it is a hollow pass — pair the two like the standard gate
-        # does. Skipped when CI-green already decided (no local run at all).
-        if rejection is None and ran_local:
-            rejection = await self._toolchain_broken_guard(ctx.agent_id, ctx.task)
-        return rejection
+        return await self._fast_path_quality_verdict(ctx)
 
     async def _i_am_done_fast_path(self, ctx: _IAmDoneContext) -> Envelope:
         """Work-already-done fast path: slimmed gates + direct transition chain.

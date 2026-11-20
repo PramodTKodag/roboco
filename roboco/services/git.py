@@ -14,7 +14,6 @@ import json
 import os
 import re
 import subprocess
-import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -55,6 +54,10 @@ from roboco.foundation.policy import lifecycle
 from roboco.foundation.policy.pr_labels import CONVENTIONS_PR_LABELS, derive_pr_labels
 from roboco.models.base import AgentRole, TaskStatus
 from roboco.models.env_branches import effective_environments, head_branch
+from roboco.runtime.subscription.project_executor import (
+    ProjectExecutionUnavailable,
+    project_executor_provider,
+)
 from roboco.services.base import (
     BaseService,
     NotFoundError,
@@ -348,11 +351,6 @@ def _git_ownership_scope(args: list[str]) -> str:
 
 # Expected number of parts in various git outputs
 _REV_LIST_PARTS = 2
-
-# `git status --porcelain`: 2 status columns + 1 space precede the path
-_PORCELAIN_PATH_OFFSET = 3
-# A quoted path needs at least its two surrounding quote characters
-_MIN_QUOTED_TOKEN_LEN = 2
 
 # GitHub REST API status codes
 _GH_UNPROCESSABLE = 422
@@ -1996,11 +1994,7 @@ class GitService(BaseService):
         if project is None:
             return 0
         workspace = await self.get_workspace(project.slug, agent_id)
-        # Regenerate + commit any codegen drift BEFORE the push carries it —
-        # a no-op unless the project sets codegen_command.
-        await self._run_codegen_and_commit(
-            str(task.branch_name), workspace, actor_agent_id=agent_id
-        )
+        await self._warn_if_codegen_not_run(str(task.branch_name))
         # Push the task's branch BY NAME, independent of the current checkout.
         # The dev's clone is shared across tasks, so by the QA-submission /
         # open_pr boundary it is usually parked on a LATER task's branch; the
@@ -4557,16 +4551,15 @@ class GitService(BaseService):
         )
         return [(name, cmd) for name, cmd in candidates if cmd]
 
-    async def run_pre_submit_quality_gate(
-        self, actor_agent_id: UUID, task: Any
-    ) -> GateResult:
+    async def run_pre_submit_quality_gate(self, task: Any) -> GateResult:
         """Run the project's fast quality gate in the developer's workspace.
 
-        Resolves the task's project and the developer's workspace clone, then
-        runs the configured lint + typecheck commands there. Returns a skipped
+        Resolves the task's project and runs the configured lint + typecheck
+        commands in the project's offline worker workspace. Returns a skipped
         pass when the project configures no fast-gate commands (so projects that
-        opt out are never blocked). Raises only on workspace-resolution failure;
-        the caller treats any such failure as fail-open.
+        opt out are never blocked). Raises ``ProjectExecutionUnavailable`` when
+        no worker can run the commands; the caller treats that as a blocked
+        submit, never a pass.
         """
         project = await self._project_for_task(task)
         if project is None:
@@ -4574,8 +4567,10 @@ class GitService(BaseService):
         commands = self._fast_gate_commands(project)
         if not commands:
             return GateResult(passed=True, skipped=True)
-        workspace = await self.get_workspace(project.slug, actor_agent_id)
-        return await run_quality_commands(workspace, commands)
+        executor = await project_executor_provider().executor_for(
+            require_uuid(project.id), require_uuid(task.id)
+        )
+        return await run_quality_commands(executor, commands)
 
     @staticmethod
     def _codegen_command_for(project: Any) -> str | None:
@@ -4589,168 +4584,32 @@ class GitService(BaseService):
         command = getattr(project, "codegen_command", None)
         return command if isinstance(command, str) and command else None
 
-    @staticmethod
-    def _porcelain_paths(status_output: str) -> set[str]:
-        """Path(s) named by each ``git status --porcelain`` line.
+    async def _warn_if_codegen_not_run(self, branch_name: str) -> None:
+        """Log that a project's ``codegen_command`` was not run on the controller.
 
-        A rename line (``R  old -> new``) contributes BOTH sides — staging
-        only the new path would leave the old path's deletion unstaged. A
-        quoted path (git wraps a path containing unusual characters in
-        double quotes) has its surrounding quotes stripped.
-        """
-        paths: set[str] = set()
-        for line in status_output.splitlines():
-            if len(line) <= _PORCELAIN_PATH_OFFSET:
-                continue
-            rest = line[_PORCELAIN_PATH_OFFSET:]
-            raw_tokens = rest.split(" -> ") if " -> " in rest else (rest,)
-            for raw_token in raw_tokens:
-                candidate = raw_token.strip()
-                if (
-                    len(candidate) >= _MIN_QUOTED_TOKEN_LEN
-                    and candidate[0] == '"'
-                    and candidate[-1] == '"'
-                ):
-                    candidate = candidate[1:-1]
-                if candidate:
-                    paths.add(candidate)
-        return paths
-
-    @classmethod
-    def _new_codegen_drift_paths(cls, before: str, after: str) -> list[str]:
-        """Paths newly dirty in ``after`` that were clean in ``before``.
-
-        Identity is the path, not the full status line, so a file already
-        dirty pre-codegen is excluded even if codegen also touched it —
-        only genuinely new drift gets staged.
-        """
-        return sorted(cls._porcelain_paths(after) - cls._porcelain_paths(before))
-
-    async def _link_codegen_commit(
-        self,
-        worktree: Path,
-        task: Any,
-        task_id: UUID,
-        message: str,
-        actor_agent_id: UUID | None,
-    ) -> None:
-        """Best-effort link of the just-made codegen commit to its task.
-
-        Mirrors every other commit path's ``_link_commit_to_task`` call so
-        this commit lands in ``task.commits``/the WorkSession instead of
-        being invisible to QA/PM/CEO review surfaces. A resolution failure
-        here only logs — the commit already landed and the caller's push
-        must proceed regardless (see ``_run_codegen_and_commit``).
-        """
-        link_agent_id = self._resolve_workspace_agent_id(task, actor_agent_id)
-        if link_agent_id is None:
-            self.log.warning(
-                "codegen_commit_link_skipped_no_agent", task_id=str(task_id)
-            )
-            return
-        sha_result = await self._run_git(worktree, ["rev-parse", "HEAD"], check=False)
-        sha = sha_result.stdout.strip()
-        if not sha:
-            self.log.warning("codegen_commit_sha_unresolved", task_id=str(task_id))
-            return
-        await self._link_commit_to_task(task_id, sha, message, link_agent_id)
-
-    async def _run_codegen_and_commit(
-        self,
-        branch_name: str,
-        workspace: Path,
-        *,
-        actor_agent_id: UUID | None = None,
-    ) -> None:
-        """Regenerate + commit codegen drift in the branch's worktree before push.
-
-        Some projects check in generated artifacts (rendered docs, generated
-        verb tables, ...) that drift whenever their source changes. Left
-        unregenerated, drift only ever surfaces later as CI's own drift gate
-        (a `git diff --exit-code` hard-fail) — a failure with no obvious link
-        back to the task that caused it. Running the project's
-        ``codegen_command`` here means any drift lands in the SAME push that's
-        about to open/update the PR, so CI never sees it stale.
-
-        Staging is scoped to what codegen ITSELF newly dirtied: a
-        ``git status --porcelain`` snapshot taken before the codegen command
-        runs is diffed against one taken after, and only the paths absent
-        from the first are staged. A file already dirty in the worktree
-        before codegen ran (e.g. crash-orphaned edits the resume path left
-        behind) is never swept into this commit, even if codegen also
-        touched it — CI's own drift gate stays the safety net for any
-        residual drift. The resulting commit is linked to the task/work
-        session (`_link_codegen_commit`) so it isn't invisible to
-        QA/PM/CEO review surfaces.
-
-        Fail-open by design: a broken/timing-out codegen command, or any
-        resolution failure (missing task/project, worktree trouble), logs a
-        warning and is skipped — the push proceeds without a commit rather
-        than blocking delivery. A red CI drift-gate on the resulting PR is the
-        safety net, not a silent pass. A null/absent ``codegen_command`` (most
-        projects) is a pure no-op.
+        Codegen executes project code and rewrites the branch's working tree.
+        The controller never runs project code, and the offline worker's
+        workspace is not this host worktree, so the command is skipped and CI's
+        own drift gate stays the safety net. A null/absent ``codegen_command``
+        (most projects) logs nothing.
         """
         try:
             task = await self._task_for_branch(branch_name)
             if task is None:
                 return
             project = await self._project_for_task(task)
-            if project is None:
+            if project is None or self._codegen_command_for(project) is None:
                 return
-            command = self._codegen_command_for(project)
-            if command is None:
-                return
-            task_id = require_uuid(task.id)
-            worktree = self._worktree_for_task(workspace, task_id)
-            await self._ensure_worktree_for_commit(workspace, worktree, branch_name)
-            before = await self._run_git(
-                worktree, ["status", "--porcelain"], check=False
-            )
-            result = await run_quality_commands(worktree, [("codegen", command)])
-            if not result.passed:
-                self.log.warning(
-                    "codegen_command_failed",
-                    project=getattr(project, "slug", None),
-                    task_id=str(task_id),
-                    output=result.output_excerpt,
-                )
-                return
-            after = await self._run_git(
-                worktree, ["status", "--porcelain"], check=False
-            )
-            new_paths = self._new_codegen_drift_paths(before.stdout, after.stdout)
-            if not new_paths:
-                self.log.info("codegen_no_new_drift", task_id=str(task_id))
-                return  # codegen touched nothing beyond pre-existing drift
-            await self._run_git(worktree, ["add", "--", *new_paths])
-            message = f"[{str(task_id)[:8]}] regenerate generated artifacts"
-            await self._run_git(worktree, ["commit", "-m", message])
-            await self._link_codegen_commit(
-                worktree, task, task_id, message, actor_agent_id
+            self.log.warning(
+                "codegen_command_not_run_on_controller",
+                project=getattr(project, "slug", None),
+                task_id=str(task.id),
+                branch=branch_name,
             )
         except Exception as exc:
             self.log.warning(
-                "codegen_and_commit_failed", branch=branch_name, error=str(exc)
+                "codegen_resolution_failed", branch=branch_name, error=str(exc)
             )
-
-    async def toolchain_status_for_task(
-        self, actor_agent_id: UUID, task: Any
-    ) -> str | None:
-        """The recorded toolchain status (``ok`` | ``broken`` | ``unknown``) for
-        the acting agent's workspace clone of the task's project, or ``None``.
-
-        ``None`` on any resolution/read failure — the caller fails open and
-        never blocks a gate on an inability to read the marker.
-        """
-        try:
-            project = await self._project_for_task(task)
-            if project is None:
-                return None
-            workspace = await self.get_workspace(project.slug, actor_agent_id)
-            _python, status = WorkspaceService.read_toolchain_status(workspace)
-            return status
-        except Exception:
-            return None
 
     async def _project_slug_for_branch(self, branch_name: str) -> str | None:
         """Resolve project slug via the task that owns the branch."""
@@ -4868,11 +4727,7 @@ class GitService(BaseService):
         workspace = await self._workspace_for_branch(
             branch_name, actor_agent_id=actor_agent_id
         )
-        # Regenerate + commit any codegen drift BEFORE this first push opens
-        # the PR — a no-op unless the project sets codegen_command.
-        await self._run_codegen_and_commit(
-            branch_name, workspace, actor_agent_id=actor_agent_id
-        )
+        await self._warn_if_codegen_not_run(branch_name)
         # Push the NAMED branch, not the workspace's current checkout. The
         # clone root is shared across a dev's tasks and (F123) parked on the
         # default branch while the task branch lives in a per-task worktree;
@@ -6545,9 +6400,6 @@ class GitService(BaseService):
             branch = task.branch_name
             if not branch:
                 return {"findings": [], "could_not_run": False}
-            clone_root = await self._workspace_for_branch(
-                branch, actor_agent_id=actor_agent_id
-            )
             changed = (
                 changed_files
                 if changed_files is not None
@@ -6565,63 +6417,54 @@ class GitService(BaseService):
             }
         if not changed:
             return {"findings": [], "could_not_run": False}
-        # Validate the worktree's working tree (F123): the dev's changes live in
-        # the per-task worktree, not the clone root (which sits on the default
-        # branch). A validator run against the clone root reads stale/default
-        # content and false-passes on newly-added files.
-        workspace = self._worktree_for_task(clone_root, require_uuid(task.id))
-        await self._ensure_worktree_for_commit(clone_root, workspace, branch)
-        return await self._run_conventions_validator(
-            workspace, changed, timeout=timeout
-        )
+        return await self._run_conventions_validator(task, changed, timeout=timeout)
 
     async def _run_conventions_validator(
-        self, workspace: Path, files: list[str], *, timeout: float | None = None
+        self, task: Any, files: list[str], *, timeout: float | None = None
     ) -> dict[str, Any]:
+        """Validate ``files`` inside the project's offline worker.
+
+        The validator parses project files, so it runs in the credential-free
+        worker, never in this process. Fail closed on every path: a timeout, an
+        unavailable worker or a validator that could not run reports
+        ``could_not_run=True`` so the block gate refuses instead of passing.
+        """
         effective_timeout = (
             timeout if timeout is not None else _CONVENTIONS_VALIDATOR_TIMEOUT_SECONDS
         )
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "roboco.conventions",
-            "check",
-            "--root",
-            str(workspace),
-            "--files",
-            *files,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
         try:
-            out, err = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=effective_timeout,
+            project = await self._project_for_task(task)
+            if project is None:
+                return self._conventions_could_not_run("task has no project")
+            executor = await project_executor_provider().executor_for(
+                require_uuid(project.id), require_uuid(task.id)
+            )
+            outcome = await asyncio.wait_for(
+                executor.check_conventions(files), timeout=effective_timeout
             )
         except TimeoutError:
-            # Fail closed (could_not_run=True → block gate refuses the submit),
-            # matching the validator's own fail-loud philosophy, and reap the
-            # killed proc so it isn't orphaned on orchestrator restart.
-            proc.kill()
-            await proc.wait()
-            return {
-                "findings": [],
-                "could_not_run": True,
-                "reason": (f"validator timed out after {effective_timeout}s"),
-            }
-        if proc.returncode != 0:
-            reason = err.decode(errors="replace").strip() or "validator crashed"
-            return {"findings": [], "could_not_run": True, "reason": reason[:300]}
+            return self._conventions_could_not_run(
+                f"validator timed out after {effective_timeout}s"
+            )
+        except ProjectExecutionUnavailable as exc:
+            return self._conventions_could_not_run(
+                f"worker unavailable: {exc.reason_code}"
+            )
+        if outcome.could_not_run:
+            return self._conventions_could_not_run(
+                outcome.reason or "validator crashed"
+            )
         findings: list[dict[str, Any]] = []
-        for line in out.decode(errors="replace").splitlines():
-            stripped = line.strip()
-            if not stripped:
-                continue
+        for line in outcome.finding_lines:
             try:
-                findings.append(json.loads(stripped))
+                findings.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
         return {"findings": findings, "could_not_run": False, "reason": None}
+
+    @staticmethod
+    def _conventions_could_not_run(reason: str) -> dict[str, Any]:
+        return {"findings": [], "could_not_run": True, "reason": reason[:300]}
 
     async def open_conventions_pr(
         self,

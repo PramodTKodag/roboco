@@ -1137,15 +1137,15 @@ class PRGateMixin(_Base):
         """Refuse pr_pass on a broken toolchain, a block-level violation, or
         non-green CI on the assembled PR's head commit.
 
-        A reviewer must not PASS an assembled PR whose suite can't run in the
-        workspace, that carries unresolved architectural-convention
-        violations, or whose CI is red/pending/unscheduled/unresolvable; only
-        red CI is a code defect pr_fail should act on — an unresolvable CI
+        A reviewer must not PASS an assembled PR that carries unresolved
+        architectural-convention violations, or whose CI is
+        red/pending/unscheduled/unresolvable; only red CI is a code defect
+        pr_fail should act on — an unresolvable CI
         lookup is a platform blip to retry, never a finding. Returns
         ``(rejection, None)`` to block, or ``(None, ci_note)`` to proceed —
         ``ci_note`` is a non-None evidence stamp only when the CI guard
         passed through a project with no CI configured at all. The
-        toolchain/conventions guards are inert when their flag is off; the
+        conventions guard is inert when its flag is off; the
         CI guard fails open on an unresolvable gate-level slug/PR number
         (``None`` from ``_resolve_ci_status``) and also passes through —
         with an evidence stamp — when ``get_pr_ci_status`` itself classifies
@@ -1161,24 +1161,19 @@ class PRGateMixin(_Base):
         parent = (
             await self._gate_diff_parent(t) if _settings.conventions_enabled else None
         )
-        guards = (
-            lambda: self._toolchain_broken_guard(reviewer_agent_id, t, reviewer=True),
-            lambda: self._conventions_guard(
-                reviewer_agent_id, t, briefing, preferred_parent=parent
-            ),
+        rejection = await self._conventions_guard(
+            reviewer_agent_id, t, briefing, preferred_parent=parent
         )
-        for guard in guards:
-            rejection = await guard()
-            if rejection is not None:
-                return (
-                    await self._emit_rejection(
-                        rejection.with_introspection(task=t, role=role_str),
-                        agent_id=reviewer_agent_id,
-                        task_id=task_id,
-                        verb="pr_pass",
-                    ),
-                    None,
-                )
+        if rejection is not None:
+            return (
+                await self._emit_rejection(
+                    rejection.with_introspection(task=t, role=role_str),
+                    agent_id=reviewer_agent_id,
+                    task_id=task_id,
+                    verb="pr_pass",
+                ),
+                None,
+            )
         return await self._ci_status_guard(
             reviewer_agent_id, task_id, t, role_str, briefing
         )

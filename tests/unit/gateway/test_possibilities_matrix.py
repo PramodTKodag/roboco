@@ -168,11 +168,10 @@ async def test_quality_verdict_ci_success_skips_local_gate(
     )
     local = AsyncMock(return_value=None)
     monkeypatch.setattr(c, "_check_quality_gate", local)
-    rejection, ran_local = await c._fast_path_quality_verdict(
+    rejection = await c._fast_path_quality_verdict(
         MagicMock(task_id=uuid4(), task=MagicMock(), briefing={})
     )
     assert rejection is None
-    assert ran_local is False
     local.assert_not_awaited()
 
 
@@ -188,11 +187,10 @@ async def test_quality_verdict_ci_failure_refuses(
     )
     local = AsyncMock(return_value=None)
     monkeypatch.setattr(c, "_check_quality_gate", local)
-    rejection, ran_local = await c._fast_path_quality_verdict(
+    rejection = await c._fast_path_quality_verdict(
         MagicMock(task_id=uuid4(), task=MagicMock(), briefing={})
     )
     assert rejection is not None
-    assert ran_local is False
     local.assert_not_awaited()
 
 
@@ -206,11 +204,10 @@ async def test_quality_verdict_no_ci_falls_back_to_local_gate(
     )
     local = AsyncMock(return_value=None)
     monkeypatch.setattr(c, "_check_quality_gate", local)
-    rejection, ran_local = await c._fast_path_quality_verdict(
+    rejection = await c._fast_path_quality_verdict(
         MagicMock(task_id=uuid4(), task=MagicMock(), briefing={})
     )
     assert rejection is None
-    assert ran_local is True
     local.assert_awaited_once()
 
 
@@ -222,11 +219,10 @@ async def test_quality_verdict_unresolvable_falls_back_to_local_gate(
     monkeypatch.setattr(c, "_resolve_ci_status", AsyncMock(return_value=None))
     local = AsyncMock(return_value=None)
     monkeypatch.setattr(c, "_check_quality_gate", local)
-    rejection, ran_local = await c._fast_path_quality_verdict(
+    rejection = await c._fast_path_quality_verdict(
         MagicMock(task_id=uuid4(), task=MagicMock(), briefing={})
     )
     assert rejection is None
-    assert ran_local is True
     local.assert_awaited_once()
 
 
@@ -259,7 +255,6 @@ class _FastPathMocks:
     conventions: AsyncMock
     open_findings: AsyncMock
     record_milestone: AsyncMock
-    toolchain: AsyncMock
 
 
 def _stub_fast_path(
@@ -270,7 +265,6 @@ def _stub_fast_path(
     ok = AsyncMock(return_value="OK")
     reject = AsyncMock(return_value="REJECT")
     record_milestone = AsyncMock(return_value=None)
-    toolchain = AsyncMock(return_value=None)
     monkeypatch.setattr(c, "_apply_resolved_findings", AsyncMock(return_value=None))
     monkeypatch.setattr(c, "_check_submit_qa_field_gates", AsyncMock(return_value=None))
     monkeypatch.setattr(c, "_behind_base_gate", AsyncMock(return_value=None))
@@ -280,9 +274,8 @@ def _stub_fast_path(
     monkeypatch.setattr(
         c,
         "_fast_path_quality_verdict",
-        AsyncMock(return_value=(quality_rejection, False)),
+        AsyncMock(return_value=quality_rejection),
     )
-    monkeypatch.setattr(c, "_toolchain_broken_guard", toolchain)
     monkeypatch.setattr(c, "_notify_qa", AsyncMock(return_value=None))
     monkeypatch.setattr(c, "_touch", AsyncMock(return_value=None))
     monkeypatch.setattr(c, "_record_milestone_progress", record_milestone)
@@ -294,7 +287,6 @@ def _stub_fast_path(
         conventions=conventions,
         open_findings=open_findings,
         record_milestone=record_milestone,
-        toolchain=toolchain,
     )
 
 
@@ -401,10 +393,7 @@ async def test_fast_path_ci_failure_rejects_before_transition(
         c,
         "_fast_path_quality_verdict",
         AsyncMock(
-            return_value=(
-                Envelope.invalid_state(message="ci red", remediate="fix"),
-                False,
-            )
+            return_value=Envelope.invalid_state(message="ci red", remediate="fix")
         ),
     )
     await c._i_am_done_fast_path(_ctx())
@@ -481,42 +470,3 @@ async def test_fast_path_pushes_branch_before_behind_base_check(
     monkeypatch.setattr(c, "_behind_base_gate", _behind)
     await c._i_am_done_fast_path(_ctx())
     assert order == ["push", "behind"]
-
-
-# ---------------------------------------------------------------------------
-# _i_am_done_fast_path: toolchain backstop pairs with the local quality gate
-# fallback (no CI signal) — never with the CI-green branch.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_fast_path_toolchain_broken_blocks_on_local_fallback(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    c = Choreographer(_deps())
-    stubs = _stub_fast_path(c, monkeypatch)
-    monkeypatch.setattr(
-        c,
-        "_fast_path_quality_verdict",
-        AsyncMock(return_value=(None, True)),  # local gate ran (no CI signal), passed
-    )
-    stubs.toolchain.return_value = Envelope.invalid_state(
-        message="toolchain broken", remediate="fix"
-    )
-    await c._i_am_done_fast_path(_ctx())
-    stubs.reject.assert_awaited_once()
-    c.task.submit_qa.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_fast_path_toolchain_guard_skipped_on_ci_green(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    c = Choreographer(_deps())
-    stubs = _stub_fast_path(c, monkeypatch)
-    monkeypatch.setattr(
-        c, "_fast_path_quality_verdict", AsyncMock(return_value=(None, False))
-    )
-    await c._i_am_done_fast_path(_ctx())
-    stubs.ok.assert_awaited_once()
-    stubs.toolchain.assert_not_awaited()

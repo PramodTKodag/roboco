@@ -29,9 +29,8 @@ The Choreographer is the server-side composition layer that turns agent intent-v
 | `open_pr` | async verb | `_impl.py:1571` | Pre-flight + `run_intent("open_pr")` (push_branch + create_pr side effects). |
 | `_open_pr_topology_rejection` | async helper | `_impl.py:2174` | Calls `merge_chain.find_topology_issue` BEFORE `create_pr` runs; on a bad shape (parented task stranded on the integration branch, or a parentless root nested inside a coordination tree) refuses with an `Envelope.invalid_state` naming the expected base + repair instead of letting `create_pr` fail later. Wrapped in `try/except Exception` (round-1 pr_gate finding F-81e261bd): a `find_topology_issue` DB error is logged (`topology_check_skip`) and returns `None` — fails open like its sibling `_behind_base_gate`, since this check only ever refuses and a transient error must never wedge `open_pr`. |
 | `i_am_done` | async verb | `_impl.py:1771` | Dev pre-submit; runs `_i_am_done_gate` then `run_intent("i_am_done")`. |
-| `_i_am_done_gate` | async helper | `_impl.py:1885` | Ordered gate chain: tracing → submit_qa fields → push → behind_base → quality → toolchain → conventions; then write AC status. |
+| `_i_am_done_gate` | async helper | `_impl.py:1885` | Ordered gate chain: tracing → submit_qa fields → push → behind_base → quality (offline worker) → conventions; then write AC status. |
 | `_behind_base_gate` | async helper | `_impl.py:2154` | Refuse submit when branch behind its base (sibling PR merged); fail-open on git error. |
-| `_toolchain_broken_guard` | async helper | `_impl.py:1939` | Block delivery gate when agent workspace can't run suite; `reviewer=True` for `pr_pass`. |
 | `_conventions_guard` | async helper | `_impl.py:2043` | Run architectural-conventions validator; `block` finding refuses gate. |
 | `_pm_task_type_error` | static method | `_impl.py:4752` | Reject a code/non-planning task_type delegated to a PM (cell or main); extracted from `_validate_assignee_task_type` to keep that dispatcher under complexity budget. |
 | `i_am_blocked` | async verb | `_impl.py:3086` | Rate-limit parking vs generic block; `run_intent("i_am_blocked")`. |
@@ -111,10 +110,10 @@ Choreographer (composed class, _impl.py)
 │   └── Board/CEO: escalate_to_ceo
 ├── Guard helpers
 │   ├── _run_claim_guards → already_active / paused / unmet_dependency / _lane_claim_guard
-│   ├── _i_am_done_gate chain → tracing / submit_qa_fields / push / behind_base / quality / toolchain / conventions
+│   ├── _i_am_done_gate chain → tracing / submit_qa_fields / push / behind_base / quality / conventions
 │   ├── _submit_up_guard / _submit_up_unchanged_pr_guard / _submit_root_unchanged_pr_guard
 │   ├── _guard_free_text / _free_text_soup / _soup_or_decision_env
-│   └── _conventions_guard / _toolchain_broken_guard
+│   └── _conventions_guard
 └── VerbRunner (_verb_runner.py)
     ├── pre_side_effects → {create_root_pr}
     ├── composes (SAVEPOINT) → {claim, set_plan, start, submit_qa, qa_pass, qa_fail, docs_complete, complete, submit_pm_review, submit_for_review, pr_pass, pr_fail, escalate_to_ceo, block, unblock, resume, pr_review_done}
@@ -133,7 +132,6 @@ Choreographer (composed class, _impl.py)
 - Internal cross-verb calls (e.g. `complete` → `cell_pm_complete` / `main_pm_complete`; `_claim_plan_start_run` shared by `i_will_work_on` + `i_will_plan`).
 
 ## Config Flags
-- `ROBOCO_TOOLCHAIN_MATCH_ENABLED` — gates `_toolchain_broken_guard` (default-off).
 - `ROBOCO_CONVENTIONS_ENABLED` — gates `_conventions_guard` (default-off).
 - `ROBOCO_OVERLOAD_BREAK_ENABLED` — rate-limit/overload parking path (default-on).
 - `ROBOCO_ORG_MEMORY_ENABLED` — institutional-memory injection in `_briefing_for` (default-off).
