@@ -37,6 +37,19 @@ def _api_base() -> str:
     )
 
 
+def _identity_headers() -> dict[str, str]:
+    """The run's own identity and token; the relay refuses anyone else."""
+    env = os.environ
+    headers = {
+        "X-Agent-ID": env.get("ROBOCO_AGENT_ID", ""),
+        "X-Agent-Role": env.get("ROBOCO_AGENT_ROLE", ""),
+    }
+    token = env.get("ROBOCO_AGENT_TOKEN")
+    if token:
+        headers["X-Agent-Token"] = token
+    return {name: value for name, value in headers.items() if value}
+
+
 async def _post_event(
     session_id: str,
     payload: dict[str, Any],
@@ -48,7 +61,7 @@ async def _post_event(
     http = client or httpx.AsyncClient(timeout=_TIMEOUT)
     url = f"{_api_base()}/api/prompter/live/{session_id}/events"
     try:
-        resp = await http.post(url, json=payload)
+        resp = await http.post(url, json=payload, headers=_identity_headers())
     except httpx.HTTPError as exc:
         return {"error": "request_failed", "detail": str(exc)}
     finally:
@@ -119,7 +132,11 @@ async def query_past_tasks(
     http = client or httpx.AsyncClient(timeout=_TIMEOUT)
     url = f"{_api_base()}/api/prompter/live/{session_id}/search-tasks"
     try:
-        resp = await http.get(url, params={"q": q, "limit": bounded_limit})
+        resp = await http.get(
+            url,
+            params={"q": q, "limit": bounded_limit},
+            headers=_identity_headers(),
+        )
     except httpx.HTTPError as exc:
         return {"error": "request_failed", "detail": str(exc), "results": []}
     finally:

@@ -592,6 +592,19 @@ async def get_agent_context(
 CurrentAgentContext = Annotated[AgentContext, Depends(get_agent_context)]
 
 
+async def require_intake_agent(agent: CurrentAgentContext) -> None:
+    """Raise 403 unless the caller is the intake interviewer.
+
+    The intake relay routes carry the interviewer's own draft events and its
+    task search; they must never be open to an anonymous or other-role caller.
+    """
+    if _role_value(agent.role) != Role.PROMPTER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the intake interviewer may use the intake relay",
+        )
+
+
 # =============================================================================
 # ROLE-GATE HELPERS
 #

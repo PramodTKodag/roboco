@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from roboco.api.access_guard import LocalAccessGuardMiddleware
 from roboco.api.auth.login_limit import LoginRateLimiter
 from roboco.api.auth.routes import mount_cloud_auth
 from roboco.api.auth.seed import ensure_seed_user_startup
@@ -375,6 +376,15 @@ def _add_request_middleware(app: FastAPI) -> None:
 
     # Setup custom middleware (error handling, logging, correlation IDs)
     setup_middleware(app)
+
+    # Outermost: with a browser session as the credential, refuse unknown Hosts
+    # and cross-origin cookie requests before anything else runs.
+    if settings.cloud_auth_enabled:
+        app.add_middleware(
+            LocalAccessGuardMiddleware,
+            allowed_hosts=settings.allowed_hosts,
+            allowed_origins=settings.cors_origins,
+        )
 
 
 def create_app() -> FastAPI:

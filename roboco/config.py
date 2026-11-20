@@ -131,6 +131,17 @@ class Settings(BaseSettings):
         ]
     )
     cors_allow_credentials: bool = True
+    # Host header values this API answers to when cloud auth is armed (exact,
+    # with port). A request for any other Host is refused, which also defeats
+    # DNS-rebinding pages. Deployments add their internal service names.
+    allowed_hosts: list[str] = Field(
+        default=[
+            "localhost:3000",
+            "127.0.0.1:3000",
+            "localhost:8000",
+            "127.0.0.1:8000",
+        ]
+    )
 
     @computed_field  # type: ignore[prop-decorator]
     @property

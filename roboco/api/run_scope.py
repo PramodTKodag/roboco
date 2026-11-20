@@ -12,6 +12,7 @@ never reaches a route.
 from __future__ import annotations
 
 import json
+import re
 import threading
 from typing import TYPE_CHECKING, Final
 
@@ -36,6 +37,12 @@ _SECRETARY_RUN_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
     }
 )
 _SECRETARY_TASK_PATH_PREFIX: Final[str] = "/api/secretary/tasks/"
+# The intake interviewer's own relay calls, one session id segment each. The
+# panel-facing live-chat routes (start/stream/messages/stop) are not listed.
+_INTAKE_RELAY_ROUTES: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
+    ("POST", re.compile(r"/api/prompter/live/[A-Za-z0-9]{1,64}/events")),
+    ("GET", re.compile(r"/api/prompter/live/[A-Za-z0-9]{1,64}/search-tasks")),
+)
 _FORWARDED_TOKEN_TTL_SECONDS: Final[float] = 60.0
 _IDENTITY_HEADERS: Final[frozenset[bytes]] = frozenset(
     {b"x-agent-id", b"x-agent-role", b"x-agent-team", b"x-agent-token"}
@@ -102,6 +109,11 @@ def _run_token_may_reach(method: str, path: str) -> bool:
     if not _is_canonical_path(path):
         return False
     if path.startswith(RUN_SCOPE_PATH_PREFIXES):
+        return True
+    if any(
+        method == allowed and pattern.fullmatch(path)
+        for allowed, pattern in _INTAKE_RELAY_ROUTES
+    ):
         return True
     if (method, path) in _SECRETARY_RUN_ROUTES:
         return True

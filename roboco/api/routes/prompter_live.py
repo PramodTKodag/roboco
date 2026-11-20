@@ -8,10 +8,10 @@ Endpoints over the in-process ``PrompterLiveRegistry``:
 - ``POST /live/{session_id}/stop``     — reap the session (panel close / confirm).
 - ``POST /live/{session_id}/events``   — the agent's events in (container -> relay).
 
-Streaming/messaging require the session to be live (its ``prompter`` container
-spawned, which calls ``registry.open``). Auth is intentionally light here —
-sessions are keyed by an opaque id on a trusted network; token enforcement is
-Phase 5.
+Streaming/messaging require the session to be live (``registry.open``). The
+panel routes are CEO-bound (``require_panel_token``); the ``events`` and
+``search-tasks`` routes are the interviewer's own and require the intake
+identity (``require_intake_agent``), so neither is reachable anonymously.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from roboco.api.deps import (
     CurrentAgentContext,
     DbSession,
     get_orchestrator,
+    require_intake_agent,
     require_panel_token,
     require_pm_or_above,
 )
@@ -373,7 +374,7 @@ async def re_interview(
     return StartLiveResponse(session_id=session_id)
 
 
-@router.post("/live/{session_id}/events")
+@router.post("/live/{session_id}/events", dependencies=[Depends(require_intake_agent)])
 @guard_deco.rate_limit(requests=60, window=60)
 @guard_deco.max_request_size(size_bytes=65536)
 @guard_deco.custom_validation(prompt_injection_validator)
@@ -408,7 +409,9 @@ _SEARCH_TASKS_DEFAULT_LIMIT = 8
 _SEARCH_TASKS_MAX_LIMIT = 10
 
 
-@router.get("/live/{session_id}/search-tasks")
+@router.get(
+    "/live/{session_id}/search-tasks", dependencies=[Depends(require_intake_agent)]
+)
 async def search_past_tasks(
     session_id: str,
     db: DbSession,
@@ -420,9 +423,8 @@ async def search_past_tasks(
     """Bounded compact task search for the intake agent's ``search_past_tasks``
     tool — "have we done something like this before?" mid-conversation.
 
-    Session-scoped as a trust boundary (the intake container has no agent
-    identity, matching ``/events``): a dead/unknown session is rejected so
-    only a live intake container can query.
+    Intake-only (``require_intake_agent``) and session-scoped: a dead/unknown
+    session is rejected so only a live intake session can query.
     """
     if not get_live_registry().is_alive(session_id):
         raise HTTPException(

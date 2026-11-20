@@ -257,15 +257,12 @@ async def test_preview_batch_passes_with_valid_token_in_strict_mode(
 
 
 @pytest.mark.asyncio
-async def test_events_ungated_in_strict_mode(
+async def test_events_refuse_an_anonymous_caller_in_strict_mode(
     auth_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """``/events`` is the container->relay callback on the internal Docker
-    network (opaque session id). Option A leaves it ungated; this test pins
-    that decision so a future gating change can't land silently."""
+    """``/events`` is the interviewer's own relay: no identity, no entry."""
     _strict(monkeypatch)
     r = await auth_client.post(
         "/api/prompter/live/unknown/events", json={"kind": "text"}
     )
-    assert r.status_code == HTTPStatus.OK  # ungated -> 200 (pushed: false)
-    assert r.json() == {"pushed": False}
+    assert r.status_code == _HTTP_401

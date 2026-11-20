@@ -479,3 +479,28 @@ async def test_search_past_tasks_success_path(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(intake_server, "query_past_tasks", _stub)
     msg = await intake_server.search_past_tasks("login")
     assert msg == intake_server.format_search_results(stub_result)
+
+
+@pytest.mark.asyncio
+async def test_relay_calls_carry_the_runs_identity_and_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ROBOCO_API_URL", "http://orch:8000")
+    monkeypatch.setenv("ROBOCO_AGENT_ID", "agent-id-1")
+    monkeypatch.setenv("ROBOCO_AGENT_ROLE", "prompter")
+    monkeypatch.setenv("ROBOCO_AGENT_TOKEN", "run-token-synthetic")
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=[])
+
+    async with _client(handler) as client:
+        await intake_server.post_draft("sess-1", {"title": "X"}, client=client)
+        await intake_server.query_past_tasks("sess-1", "login", client=client)
+
+    assert len(seen) == 2
+    for request in seen:
+        assert request.headers["x-agent-id"] == "agent-id-1"
+        assert request.headers["x-agent-role"] == "prompter"
+        assert request.headers["x-agent-token"] == "run-token-synthetic"

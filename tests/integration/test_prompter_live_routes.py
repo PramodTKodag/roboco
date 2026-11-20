@@ -47,19 +47,26 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
 
+_INTAKE_RELAY_SUFFIXES = ("/events", "/search-tasks")
+
+
+async def _act_as_the_intake_interviewer(request: httpx.Request) -> None:
+    """The relay routes are the interviewer's own: send its identity on them."""
+    if request.url.path.endswith(_INTAKE_RELAY_SUFFIXES):
+        request.headers["X-Agent-ID"] = "intake-1"
+        request.headers["X-Agent-Role"] = "prompter"
+
+
 @pytest_asyncio.fixture
 async def live_client(db_session: Any) -> AsyncIterator[dict[str, Any]]:
     """A real (Postgres-backed) DB session — ``/events``/``/messages`` now
     durably persist drafts + chat turns, so a fake DB object can no longer
     stand in."""
 
-    def container_handler(_req: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"ok": True})
-
     await _seed_intake_agent(db_session)
 
-    mock_client = httpx.AsyncClient(transport=httpx.MockTransport(container_handler))
-    registry = prompter_live.PrompterLiveRegistry(http_client=mock_client)
+    registry = prompter_live.PrompterLiveRegistry()
+    registry.set_turn_handler(lambda _session_id, _text: True)
     prompter_live._RegistryHolder.instance = registry  # inject the singleton
 
     async def _real_db() -> AsyncIterator[Any]:
@@ -69,11 +76,14 @@ async def live_client(db_session: Any) -> AsyncIterator[dict[str, Any]]:
     app.include_router(router, prefix="/api/prompter")
     app.dependency_overrides[get_db] = _real_db
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        event_hooks={"request": [_act_as_the_intake_interviewer]},
+    ) as client:
         yield {"client": client, "registry": registry, "db": db_session}
 
     prompter_live._RegistryHolder.instance = None
-    await mock_client.aclose()
 
 
 @pytest.mark.asyncio
@@ -961,3 +971,52 @@ async def test_search_tasks_limit_above_max_422(live_client: dict) -> None:
         "/api/prompter/live/s1/search-tasks", params={"q": "login", "limit": 11}
     )
     assert resp.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+# ---------------------------------------------------------------------------
+# The relay routes are the interviewer's own: nobody else may use them.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["ceo", "developer", "cell_pm", "secretary"])
+async def test_relay_routes_refuse_every_other_role(
+    live_client: dict, role: str
+) -> None:
+    client, registry = live_client["client"], live_client["registry"]
+    registry.open("s1", "intake-1")
+    other = httpx.AsyncClient(
+        transport=client._transport,  # noqa: SLF001 - same mounted app
+        base_url="http://test",
+    )
+    headers = {"X-Agent-ID": "intake-1", "X-Agent-Role": role}
+    async with other:
+        posted = await other.post(
+            "/api/prompter/live/s1/events",
+            json={"kind": "text", "text": "x"},
+            headers=headers,
+        )
+        searched = await other.get(
+            "/api/prompter/live/s1/search-tasks",
+            params={"q": "login"},
+            headers=headers,
+        )
+    assert posted.status_code == HTTPStatus.FORBIDDEN
+    assert searched.status_code == HTTPStatus.FORBIDDEN
+    assert registry.get("s1").queue.qsize() == 0
+
+
+@pytest.mark.asyncio
+async def test_relay_routes_refuse_an_anonymous_caller(live_client: dict) -> None:
+    client = live_client["client"]
+    live_client["registry"].open("s1", "intake-1")
+    other = httpx.AsyncClient(transport=client._transport, base_url="http://test")  # noqa: SLF001
+    async with other:
+        posted = await other.post(
+            "/api/prompter/live/s1/events", json={"kind": "text", "text": "x"}
+        )
+        searched = await other.get(
+            "/api/prompter/live/s1/search-tasks", params={"q": "login"}
+        )
+    assert posted.status_code == HTTPStatus.UNAUTHORIZED
+    assert searched.status_code == HTTPStatus.UNAUTHORIZED

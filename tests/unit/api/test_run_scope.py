@@ -152,6 +152,41 @@ async def test_a_valid_run_token_is_rewritten_to_the_pinned_identity() -> None:
     assert verify_run_token(forwarded[b"x-agent-token"].decode()) is None
 
 
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/api/prompter/live/abc123def456/events"),
+        ("GET", "/api/prompter/live/abc123def456/search-tasks"),
+    ],
+)
+async def test_the_intake_relay_calls_are_in_scope(method: str, path: str) -> None:
+    gate, downstream = _gate()
+    status, _ = await _call(gate, path, _headers(_token()), method)
+    assert status == HTTPStatus.OK
+    assert downstream.scope is not None
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/api/prompter/live/abc123/events"),
+        ("POST", "/api/prompter/live/abc123/search-tasks"),
+        ("POST", "/api/prompter/live/start"),
+        ("POST", "/api/prompter/live/abc123/messages"),
+        ("POST", "/api/prompter/live/abc123/stop"),
+        ("GET", "/api/prompter/live/abc123/stream"),
+        ("POST", "/api/prompter/live/abc123/events/extra"),
+        ("POST", "/api/prompter/live/../events"),
+        ("POST", "/api/prompter/live/a%2Fb/events"),
+    ],
+)
+async def test_other_prompter_routes_stay_out_of_scope(method: str, path: str) -> None:
+    gate, downstream = _gate()
+    status, _ = await _call(gate, path, _headers(_token()), method)
+    assert status == HTTPStatus.FORBIDDEN
+    assert downstream.scope is None
+
+
 async def test_do_routes_are_in_scope() -> None:
     gate, _ = _gate()
     status, _ = await _call(gate, "/api/v1/do/commit", _headers(_token()))
