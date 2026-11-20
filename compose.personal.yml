@@ -1,0 +1,81 @@
+# Personal deployment. This file defines the network boundary every model
+# request depends on; the remaining services attach to the `runtime` network.
+#
+#   runtime : internal (no route out, no outside DNS, no IPv6, no host gateway).
+#             The model runtime joins only this network.
+#   egress  : the only network with an outside route. Only the proxy joins it.
+#
+# Workers never join either network: the launcher starts them with `--network
+# none`. The proxy is the single process that can reach the provider, and it
+# forwards only what the reviewed policy in deploy/personal allows.
+
+name: roboco-personal
+
+networks:
+  runtime:
+    internal: true
+    driver: bridge
+    enable_ipv6: false
+  egress:
+    driver: bridge
+    enable_ipv6: false
+
+volumes:
+  # Private CA key lives here and is mounted into the proxy alone.
+  egress_ca_private:
+  # Public certificate only; mounted read-only into the model runtime.
+  egress_ca_public:
+
+services:
+  egress-proxy:
+    image: mitmproxy/mitmproxy@sha256:743b6cdc817211d64bc269f5defacca8d14e76e647fc474e5c7244dbcb645141
+    entrypoint: ["mitmdump", "--set", "confdir=/home/mitmproxy/.mitmproxy"]
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp"]
+    environment:
+      ROBOCO_EGRESS_POLICY_PATH: /opt/egress/egress-policy.json
+      ROBOCO_EGRESS_PROFILE: normal
+      # Injected by `make personal-up` from deploy/personal/egress-policy.sha256;
+      # a missing or different digest refuses startup.
+      ROBOCO_EGRESS_POLICY_SHA256: ${ROBOCO_EGRESS_POLICY_SHA256:?reviewed policy digest required}
+      PYTHONPATH: /opt/egress
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - egress_ca_private:/home/mitmproxy/.mitmproxy
+      - ./deploy/personal/proxy.yaml:/home/mitmproxy/.mitmproxy/config.yaml:ro
+      - ./deploy/personal/proxy_addon.py:/opt/egress/proxy_addon.py:ro
+      - ./deploy/personal/egress-policy.json:/opt/egress/egress-policy.json:ro
+      - ./roboco/runtime/subscription/egress_policy.py:/opt/egress/egress_policy.py:ro
+    networks:
+      runtime:
+        aliases: [egress-proxy]
+      egress: {}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8080), 3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+    restart: unless-stopped
+
+  # Copies the public certificate (never the key) to the volume the runtime sees.
+  egress-ca-publish:
+    image: mitmproxy/mitmproxy@sha256:743b6cdc817211d64bc269f5defacca8d14e76e647fc474e5c7244dbcb645141
+    entrypoint: ["cp", "/private/mitmproxy-ca-cert.pem", "/public/mitmproxy-ca-cert.pem"]
+    # Root only to read the key-owner's directory and write the fresh volume; no
+    # network, no other capability, and the private volume is read-only.
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    network_mode: none
+    volumes:
+      - egress_ca_private:/private:ro
+      - egress_ca_public:/public
+    depends_on:
+      egress-proxy:
+        condition: service_healthy
+    restart: "no"

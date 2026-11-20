@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from roboco.foundation.policy.subscription_policy import (
     FORBIDDEN_FEATURE_FLAGS,
@@ -57,13 +60,61 @@ def validate_subscription_policy(
         raise SubscriptionPolicyViolation(tuple(violations))
 
 
-def build_claude_env() -> dict[str, str]:
+class EgressRouteInvalid(ValueError):
+    """The configured egress route is unusable. Never echoes the value."""
+
+
+@dataclass(frozen=True)
+class EgressRoute:
+    """The one trusted way out: the TLS proxy and the CA that signs its leaf certs."""
+
+    proxy_url: str
+    ca_file: str
+
+
+def parse_egress_route(proxy_url: str, ca_file: str) -> EgressRoute:
+    """Validate the trusted deployment's proxy address and CA path."""
+    parts = urlsplit(proxy_url)
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise EgressRouteInvalid("proxy port is invalid") from exc
+    if (
+        parts.scheme != "http"
+        or not parts.hostname
+        or port is None
+        or parts.username is not None
+        or parts.password is not None
+        or parts.path not in {"", "/"}
+        or parts.query
+        or parts.fragment
+    ):
+        raise EgressRouteInvalid("proxy URL must be http://host:port")
+    ca = PurePosixPath(ca_file)
+    if not ca.is_absolute() or ".." in ca.parts:
+        raise EgressRouteInvalid("CA path must be absolute")
+    return EgressRoute(proxy_url=f"http://{parts.hostname}:{port}", ca_file=str(ca))
+
+
+def build_claude_env(egress: EgressRoute | None = None) -> dict[str, str]:
     """Environment for the official CLI, built from an allowlist.
 
     Nothing is inherited from the calling process: no credential, proxy, cloud
-    or provider variable can reach the CLI by accident.
+    or provider variable can reach the CLI by accident. The proxy and its CA come
+    only from the trusted deployment's ``EgressRoute``.
     """
+    route = (
+        {
+            "HTTPS_PROXY": egress.proxy_url,
+            "HTTP_PROXY": egress.proxy_url,
+            "NO_PROXY": "",
+            "NODE_EXTRA_CA_CERTS": egress.ca_file,
+        }
+        if egress is not None
+        else {}
+    )
     return {
+        **route,
         "PATH": _CLI_PATH,
         "HOME": CLAUDE_HOME,
         "CLAUDE_CONFIG_DIR": CLAUDE_CONFIG_DIR,

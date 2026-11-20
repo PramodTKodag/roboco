@@ -12,6 +12,11 @@ from urllib.parse import urlsplit
 
 from roboco.runtime.subscription.gateway_socket import GatewayServer
 from roboco.runtime.subscription.launcher_client import WorkerLauncher
+from roboco.runtime.subscription.policy import (
+    EgressRoute,
+    EgressRouteInvalid,
+    parse_egress_route,
+)
 from roboco.runtime.subscription.service import ClaudeService
 from roboco.runtime.subscription.service_server import ServiceFrontend
 from roboco.runtime.subscription.tool_gateway import ToolGateway
@@ -43,6 +48,7 @@ class ServiceSettings:
     runtime_dir: Path
     socket_path: Path
     orchestrator_url: str
+    egress: EgressRoute
 
 
 def _required(env: Mapping[str, str], name: str) -> str:
@@ -65,6 +71,20 @@ def _orchestrator_url(env: Mapping[str, str]) -> str:
     if url and urlsplit(url).scheme not in {"http", "https"}:
         raise ServiceSettingsError("ROBOCO_ORCHESTRATOR_URL must be an http(s) URL")
     return url.rstrip("/")
+
+
+def _egress_route(env: Mapping[str, str]) -> EgressRoute:
+    """The proxy and CA are mandatory: the service never runs without them."""
+    try:
+        route = parse_egress_route(
+            _required(env, "ROBOCO_EGRESS_PROXY_URL"),
+            _required(env, "ROBOCO_EGRESS_CA_FILE"),
+        )
+    except EgressRouteInvalid as exc:
+        raise ServiceSettingsError(f"egress route refused: {exc}") from exc
+    if not Path(route.ca_file).is_file():
+        raise ServiceSettingsError("ROBOCO_EGRESS_CA_FILE is unreadable")
+    return route
 
 
 def load_service_settings(env: Mapping[str, str]) -> ServiceSettings:
@@ -94,6 +114,7 @@ def load_service_settings(env: Mapping[str, str]) -> ServiceSettings:
             env.get("ROBOCO_GATEWAY_SOCKET_PATH", str(DEFAULT_SOCKET_PATH))
         ),
         orchestrator_url=_orchestrator_url(env),
+        egress=_egress_route(env),
     )
 
 
@@ -112,6 +133,7 @@ async def _serve(settings: ServiceSettings) -> None:
         runtime_dir=settings.runtime_dir,
         socket_path=settings.socket_path,
         orchestrator_url=settings.orchestrator_url,
+        egress=settings.egress,
     )
     frontend = ServiceFrontend(service, token=settings.service_token)
     try:

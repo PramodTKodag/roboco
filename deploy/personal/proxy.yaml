@@ -1,0 +1,17 @@
+# mitmproxy options for the egress proxy. Mounted read-only; nothing here is
+# reachable from the model runtime, a worker or a project.
+listen_host: 0.0.0.0
+listen_port: 8080
+mode:
+  - regular
+# Resolve and dial only after the policy allows the request (addon pins the IP).
+connection_strategy: lazy
+# The upstream certificate is verified against the system roots; never relaxed.
+ssl_insecure: false
+upstream_cert: false
+# No flow content, headers or bodies in logs, and no flow is stored.
+flow_detail: 0
+termlog_verbosity: info
+save_stream_file: null
+scripts:
+  - /opt/egress/proxy_addon.py

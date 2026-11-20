@@ -21,7 +21,7 @@ from roboco.foundation.policy.subscription_policy import (
     classify_auth_status_text,
 )
 from roboco.runtime.subscription.contracts import SubscriptionState, SubscriptionStatus
-from roboco.runtime.subscription.policy import build_claude_env
+from roboco.runtime.subscription.policy import EgressRoute, build_claude_env
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def _kill_process_group(pid: int) -> None:
 
 
 async def _run_status_command(
-    cli_path: Path, timeout_seconds: float
+    cli_path: Path, timeout_seconds: float, egress: EgressRoute | None
 ) -> tuple[int, bytes] | str:
     """Return (exit code, stdout) or a reason code when the command can't run."""
     try:
@@ -66,7 +66,7 @@ async def _run_status_command(
             "auth",
             "status",
             "--json",
-            env=build_claude_env(),
+            env=build_claude_env(egress),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
@@ -84,12 +84,15 @@ async def _run_status_command(
 
 
 async def inspect_subscription(
-    *, cli_path: Path | None = None, timeout_seconds: float | None = None
+    *,
+    cli_path: Path | None = None,
+    timeout_seconds: float | None = None,
+    egress: EgressRoute | None = None,
 ) -> SubscriptionStatus:
     """Ask the official CLI who is logged in; only a clean subscription is ready."""
     command = cli_path or Path(settings.subscription_cli_path)
     timeout = timeout_seconds or settings.subscription_status_timeout_seconds
-    outcome = await _run_status_command(command, timeout)
+    outcome = await _run_status_command(command, timeout, egress)
     if isinstance(outcome, str):
         return _status(SubscriptionState.CONFIGURATION_ERROR, outcome)
     exit_code, stdout = outcome

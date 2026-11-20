@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "profiles": {
+    "normal": [
+      {
+        "id": "inference_messages",
+        "host": "api.anthropic.com",
+        "port": 443,
+        "methods": ["POST"],
+        "path": "/v1/messages",
+        "query_keys": ["beta"],
+        "content_types": ["application/json"]
+      }
+    ],
+    "maintenance": []
+  }
+}

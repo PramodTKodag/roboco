@@ -20,7 +20,7 @@ import signal
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from roboco.runtime.subscription.auth import inspect_subscription
 from roboco.runtime.subscription.cli import (
@@ -41,7 +41,7 @@ from roboco.runtime.subscription.contracts import (
     RunState,
     SubscriptionState,
 )
-from roboco.runtime.subscription.policy import build_claude_env
+from roboco.runtime.subscription.policy import EgressRoute, build_claude_env
 from roboco.runtime.subscription.stream_parser import Outcome, StreamParser
 from roboco.runtime.subscription.tool_gateway import ToolDenied, ToolGateway
 
@@ -103,8 +103,10 @@ class ClaudeService:
         max_queued: int = MAX_QUEUED_RUNS,
         inspect: StatusInspector = inspect_subscription,
         orchestrator_url: str = "",
+        egress: EgressRoute | None = None,
     ) -> None:
         self._orchestrator_url = orchestrator_url
+        self._egress = egress
         self._gateway = gateway
         self._runtime_dir = runtime_dir
         self._socket_path = socket_path
@@ -120,7 +122,7 @@ class ClaudeService:
 
     async def status(self) -> SubscriptionStatus:
         async with self._credential_lock:
-            return await self._inspect(cli_path=self._cli_path)
+            return await self._inspect(**self._inspect_arguments())
 
     async def cancel(self, run_id: UUID) -> bool:
         """Stop a queued or running run and revoke its tools; False if unknown."""
@@ -168,7 +170,7 @@ class ClaudeService:
         run_id = request.spec.run_id
         if active.cancelled.is_set():
             return _result(run_id, RunState.CANCELLED, "cancelled")
-        status = await self._inspect(cli_path=self._cli_path)
+        status = await self._inspect(**self._inspect_arguments())
         if status.state is not SubscriptionState.READY:
             logger.warning("Run refused: run=%s subscription=%s", run_id, status.state)
             return _result(
@@ -203,6 +205,12 @@ class ClaudeService:
             usage=outcome.usage,
         )
 
+    def _inspect_arguments(self) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"cli_path": self._cli_path}
+        if self._egress is not None:
+            arguments["egress"] = self._egress
+        return arguments
+
     async def _execute(
         self,
         request: RunRequest,
@@ -220,7 +228,7 @@ class ClaudeService:
         process = await asyncio.create_subprocess_exec(
             str(self._cli_path),
             *argv,
-            env=build_claude_env(),
+            env=build_claude_env(self._egress),
             cwd=self._cwd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,

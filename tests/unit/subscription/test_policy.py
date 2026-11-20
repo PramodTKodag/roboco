@@ -6,7 +6,9 @@ import pytest
 from roboco.config import Settings
 from roboco.runtime.subscription.policy import (
     SubscriptionPolicyViolation,
+    EgressRouteInvalid,
     build_claude_env,
+    parse_egress_route,
     validate_subscription_policy,
 )
 from roboco.services.settings import SettingValidationError, validate_setting
@@ -137,3 +139,42 @@ def test_billing_acknowledgement_accepts_only_an_iso_timestamp() -> None:
     for bad in ("true", "yes", "", "2026-13-40", "not a date"):
         with pytest.raises(SettingValidationError):
             validate_setting("subscription_billing_acknowledged_at", bad)
+
+
+def test_cli_env_routes_through_the_trusted_proxy_and_ca_only() -> None:
+    route = parse_egress_route("http://egress-proxy:8080", "/etc/roboco/egress/ca.pem")
+    env = build_claude_env(route)
+    assert env["HTTPS_PROXY"] == "http://egress-proxy:8080"
+    assert env["HTTP_PROXY"] == "http://egress-proxy:8080"
+    assert env["NO_PROXY"] == ""
+    assert env["NODE_EXTRA_CA_CERTS"] == "/etc/roboco/egress/ca.pem"
+    validate_subscription_policy(_settings(), environ=env)
+
+
+def test_cli_env_ignores_ambient_proxy_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://attacker.invalid:3128")
+    monkeypatch.setenv("NODE_EXTRA_CA_CERTS", "/tmp/attacker-ca.pem")  # noqa: S108
+    env = build_claude_env()
+    assert "HTTPS_PROXY" not in env
+    assert "NODE_EXTRA_CA_CERTS" not in env
+
+
+@pytest.mark.parametrize(
+    ("proxy_url", "ca_file"),
+    [
+        ("https://egress-proxy:8080", "/ca.pem"),
+        ("http://egress-proxy", "/ca.pem"),
+        ("http://user:pw@egress-proxy:8080", "/ca.pem"),
+        ("http://egress-proxy:8080/path", "/ca.pem"),
+        ("http://egress-proxy:8080?x=1", "/ca.pem"),
+        ("http://egress-proxy:99999", "/ca.pem"),
+        ("", "/ca.pem"),
+        ("http://egress-proxy:8080", "relative/ca.pem"),
+        ("http://egress-proxy:8080", "/etc/../ca.pem"),
+    ],
+)
+def test_an_unusable_egress_route_is_refused(proxy_url: str, ca_file: str) -> None:
+    with pytest.raises(EgressRouteInvalid):
+        parse_egress_route(proxy_url, ca_file)
