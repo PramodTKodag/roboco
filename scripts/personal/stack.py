@@ -341,7 +341,7 @@ def check() -> None:
         raise StackRefused("the subscription test suites failed")
 
 
-def _owner_session() -> urllib.request.OpenerDirector:
+def owner_session() -> urllib.request.OpenerDirector:
     password = _read_env_file(STATE_DIR / "secrets.env")["ROBOCO_CLOUD_AUTH_PASSWORD"]
     # The edge is plain HTTP on loopback only; the session cookie is `Secure`, so
     # the jar must be told that loopback HTTP may carry it.
@@ -372,7 +372,7 @@ def validate_import_source(source: Path) -> Path:
 
 
 def _link_workspace(project_id: UUID, handle: str) -> None:
-    opener = _owner_session()
+    opener = owner_session()
     request = urllib.request.Request(  # noqa: S310
         f"{owner_url()}/api/projects/{project_id}/offline-workspace",
         data=json.dumps({"workspace_handle": handle}).encode(),
@@ -419,7 +419,7 @@ def import_project(
 
 def export_reviewed_patches(task_id: str, out_dir: Path) -> list[Path]:
     """Write the task's accepted patches, in apply order, as numbered files."""
-    opener = _owner_session()
+    opener = owner_session()
     url = f"{owner_url()}/api/tasks/{urllib.parse.quote(task_id, safe='')}/review-export"
     with opener.open(url, timeout=30) as response:  # noqa: S310  # nosec B310
         patches = json.load(response)["patches"]
