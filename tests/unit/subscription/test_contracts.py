@@ -122,3 +122,108 @@ def test_result_usage_is_integer_counters_only() -> None:
             reason_code=None,
             usage={"cost_usd": 0.5},  # type: ignore[dict-item]
         )
+
+
+# ---------------------------------------------------------------------------
+# Worker contracts
+# ---------------------------------------------------------------------------
+
+from roboco.runtime.subscription.contracts import (  # noqa: E402
+    MAX_STREAM_BYTES,
+    WorkerJob,
+    WorkerOperation,
+    WorkerResult,
+)
+
+
+def _job(operation: str, payload: dict[str, object], **overrides: object) -> WorkerJob:
+    base: dict[str, object] = {
+        "job_id": uuid4(),
+        "run_id": uuid4(),
+        "project_id": uuid4(),
+        "workspace_handle": uuid4(),
+        "operation": operation,
+        "payload": {"operation": operation, **payload},
+    }
+    return WorkerJob(**{**base, **overrides})  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("operation", "payload"),
+    [
+        ("read_file", {"path": "src/app.py"}),
+        ("list_files", {"path": "."}),
+        ("search_text", {"pattern": "TODO", "path": "src"}),
+        ("write_file", {"path": "a.txt", "content": "x"}),
+        ("apply_patch", {"patch": "--- a\n+++ b\n"}),
+        ("run_command", {"command": "pytest -q"}),
+        ("export_patch", {}),
+    ],
+)
+def test_every_operation_has_a_valid_payload(
+    operation: str, payload: dict[str, object]
+) -> None:
+    assert _job(operation, payload).operation is WorkerOperation(operation)
+
+
+def test_payload_must_match_the_declared_operation() -> None:
+    with pytest.raises(ValidationError):
+        WorkerJob(
+            job_id=uuid4(),
+            run_id=uuid4(),
+            project_id=uuid4(),
+            workspace_handle=uuid4(),
+            operation=WorkerOperation.READ_FILE,
+            payload={"operation": "run_command", "command": "id"},  # type: ignore[arg-type]
+        )
+
+
+def test_unknown_operation_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _job("docker_run", {"image": "evil"})
+
+
+@pytest.mark.parametrize(
+    "field", ["image", "argv", "env", "mounts", "network", "capabilities", "timeout"]
+)
+def test_job_payloads_reject_launch_shaping_fields(field: str) -> None:
+    with pytest.raises(ValidationError):
+        _job("run_command", {"command": "id", field: "x"})
+    with pytest.raises(ValidationError):
+        _job("read_file", {"path": "a", field: "x"})
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/etc/passwd", "../x", "a/../../x", "a/./b/../../../c", "a\x00b", "", "a\\b", "~"],
+)
+def test_paths_must_be_safe_and_relative(path: str) -> None:
+    with pytest.raises(ValidationError):
+        _job("read_file", {"path": path})
+
+
+def test_oversized_content_and_command_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _job("write_file", {"path": "a", "content": "x" * (1024 * 1024 + 1)})
+    with pytest.raises(ValidationError):
+        _job("run_command", {"command": "x" * (64 * 1024 + 1)})
+
+
+def test_worker_result_is_bounded_per_stream() -> None:
+    WorkerResult(
+        job_id=uuid4(),
+        exit_code=0,
+        stdout="x" * MAX_STREAM_BYTES,
+        stderr="",
+        truncated=False,
+        reason_code=None,
+    )
+    with pytest.raises(ValidationError):
+        WorkerResult(
+            job_id=uuid4(),
+            exit_code=0,
+            stdout="x" * (MAX_STREAM_BYTES + 1),
+            stderr="",
+            truncated=False,
+            reason_code=None,
+        )

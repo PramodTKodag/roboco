@@ -56,6 +56,9 @@ async def test_persisted_forbidden_flag_row_is_never_applied(
     monkeypatch.setattr(settings_service, "get_settings_service", lambda _s: stored)
     monkeypatch.setattr(settings, "decisions_tier_openrouter_enabled", False)
     monkeypatch.setattr(settings, "token_factory_sandboxes_enabled", False)
+    # apply_persisted_feature_flags writes the global settings object; register
+    # the benign flag with monkeypatch so it is restored after the test.
+    monkeypatch.setattr(settings, "research_enabled", settings.research_enabled)
     session: Any = object()
 
     applied = await settings_service.apply_persisted_feature_flags(session)
