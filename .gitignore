@@ -135,3 +135,6 @@ docs/internal/
 .mimosa/
 .video_agent/
 .deploy-cache/
+
+# Staged official CLI artifacts for contract probes (verified downloads; never commit)
+.probe-cache/

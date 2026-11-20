@@ -50,8 +50,8 @@ Result is green on the *insecure* upstream behavior, so these tests encode the m
 
 | Task | Status | Commit | Evidence / blockers |
 | --- | --- | --- | --- |
-| 0 Baseline | in progress | — | baseline above; fork verified |
-| 1 CLI contract proof | not started | — | — |
+| 0 Baseline | done | 4eb4f66c | baseline above; fork verified |
+| 1 CLI contract proof | **partial**: synthetic layer proven | (this commit) | 36 tests pass against the real pinned binary (container, synthetic provider). Open: live subscription login, TLS-proxy compatibility + endpoint inventory (feeds Task 10). See `cli-contract.md`. |
 | 2 Policy + status | not started | — | — |
 | 3 Launcher | not started | — | — |
 | 4 Workspace admission + files | not started | — | — |
