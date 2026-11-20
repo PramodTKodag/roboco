@@ -137,6 +137,29 @@ export function useTaskAttestationDownload(taskId: string) {
   });
 }
 
+// The reviewed-work export (GET /tasks/{id}/review-export): every accepted
+// patch under the task, concatenated in apply order into one .patch file the
+// owner applies to their own checkout. Nothing is pushed or published.
+export function useReviewPatchExport(taskId: string) {
+  return useMutation({
+    mutationFn: async () => {
+      const { patches } = await tasksApi.getReviewExport(taskId);
+      if (patches.length === 0) {
+        throw new Error("No accepted changes to export yet");
+      }
+      const series = patches
+        .map(({ patch }) => (patch.endsWith("\n") ? patch : patch + "\n"))
+        .join("");
+      triggerTextFileDownload(
+        series,
+        "reviewed-" + taskId.slice(0, 8) + ".patch",
+        "text/x-diff",
+      );
+      return patches.length;
+    },
+  });
+}
+
 export function useSubtasks(parentTaskId: string) {
   return useQuery({
     queryKey: taskKeys.subtasks(parentTaskId),

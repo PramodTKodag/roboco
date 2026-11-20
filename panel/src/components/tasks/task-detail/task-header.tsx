@@ -10,6 +10,7 @@ import {
   useTaskValidTransitions,
 } from "@/hooks/use-tasks";
 import { AttestationDownload } from "./attestation-download";
+import { ReviewPatchExport } from "./review-patch-export";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -729,6 +730,7 @@ export function TaskHeader({ task, onAction, nav }: TaskHeaderProps) {
         <div className="flex shrink-0 items-center gap-2">
           {nav}
           <AttestationDownload task={task} />
+          <ReviewPatchExport task={task} />
           {actions.length > 0 && (
             <DropdownMenu>
               <Tooltip>

@@ -102,6 +102,21 @@ export interface CollisionMap {
 }
 
 // ============================================================================
+// Accepted patches under a task (mirrors roboco/api/schemas/tasks.py
+// ReviewExportResponse). Applied in array order they reproduce the reviewed work.
+export interface ReviewExportPatch {
+  artifact_id: string;
+  task_id: string;
+  sha256: string;
+  paths: string[];
+  patch: string;
+}
+
+export interface ReviewExport {
+  root_task_id: string;
+  patches: ReviewExportPatch[];
+}
+
 // Per-task attestation receipt — wire shapes mirroring
 // roboco/api/schemas/attestation.py (backend subtask 3e269117).
 // ============================================================================
@@ -1233,12 +1248,24 @@ export const tasksApi = {
   getAttestationMarkdown: async (taskId: string): Promise<string> => {
     if (isMockMode())
       return "# Verification receipt\n\n(mock receipt for " + taskId + ")\n";
-    const { data } = await api.get<string>("/tasks/" + taskId + "/attestation", {
-      params: { format: "md" },
-      // text/markdown must not ride axios's JSON.parse attempt — pass the
-      // body through untouched.
-      transformResponse: (body) => body,
-    });
+    const { data } = await api.get<string>(
+      "/tasks/" + taskId + "/attestation",
+      {
+        params: { format: "md" },
+        // text/markdown must not ride axios's JSON.parse attempt — pass the
+        // body through untouched.
+        transformResponse: (body) => body,
+      },
+    );
+    return data;
+  },
+
+  // GET /tasks/{id}/review-export — the accepted patches under a task, in the
+  // order to apply them (owner only; the server re-verifies every patch).
+  getReviewExport: async (taskId: string): Promise<ReviewExport> => {
+    const { data } = await api.get<ReviewExport>(
+      "/tasks/" + taskId + "/review-export",
+    );
     return data;
   },
 };
