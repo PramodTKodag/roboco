@@ -119,6 +119,7 @@ def test_cli_env_is_constructed_from_allowlist(monkeypatch: pytest.MonkeyPatch) 
         "DISABLE_TELEMETRY",
         "DISABLE_ERROR_REPORTING",
         "DISABLE_AUTOUPDATER",
+        "CLAUDE_CODE_MAX_RETRIES",
     }
     assert SECRET_VALUE not in " ".join(env.values())
     assert env["HOME"] == "/home/claude"

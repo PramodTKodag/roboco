@@ -57,7 +57,7 @@ Setup: pinned CLI in a locked container on an internal-only network, `HTTPS_PROX
 
 Not covered by the spike and still required in Task 10: OAuth endpoints (token refresh and any login-time destinations), which only a real login can reveal; redirects, SNI/Host mismatch, IP literals, DNS rebinding and IPv6 negative tests; proxy-death behavior; certificate verification of the real upstream.
 
-CLI-internal retries: when the proxy was unreachable, the CLI emitted `api_retry` events with `max_retries: 10` and exponential backoff. The plan allows at most two retries on the same configuration, so Task 6 must find and test a control that bounds this (or enforce the bound by terminating the run); until then the CLI's own retry count is unbounded relative to the plan.
+CLI-internal retries: when the proxy was unreachable, the CLI emitted `api_retry` events with `max_retries: 10` and exponential backoff. Resolved: `CLAUDE_CODE_MAX_RETRIES=2` in the CLI environment (set by `build_claude_env()`, part of the trusted allowlist) bounds it to `max_retries: 2`, verified against the real binary in a container with `--network none`. The service additionally bounds a run by wall-clock time (1800 s) and turns (32, enforced from the event stream as well as by `--max-turns`).
 
 ## Other observations that shape later tasks
 

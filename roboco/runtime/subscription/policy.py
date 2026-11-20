@@ -11,6 +11,7 @@ from roboco.foundation.policy.subscription_policy import (
     enabled_forbidden_flags,
     forbidden_env_names,
 )
+from roboco.runtime.subscription.contracts import CLI_MAX_RETRIES
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -73,4 +74,5 @@ def build_claude_env() -> dict[str, str]:
         "DISABLE_TELEMETRY": "1",
         "DISABLE_ERROR_REPORTING": "1",
         "DISABLE_AUTOUPDATER": "1",
+        "CLAUDE_CODE_MAX_RETRIES": str(CLI_MAX_RETRIES),
     }

@@ -29,6 +29,13 @@ MAX_STREAM_BYTES = 64 * 1024
 MAX_COMMAND_BYTES = 64 * 1024
 MAX_PATH_BYTES = 1024
 COMMAND_TIMEOUT_SECONDS = 600
+# Trusted per-run limits. Raising them is an owner configuration change, never
+# a task or model argument.
+MAX_RUN_SECONDS = 1800
+MAX_RUN_TURNS = 32
+MAX_QUEUED_RUNS = 64
+# The CLI's own default is 10 retries; the plan allows two on one configuration.
+CLI_MAX_RETRIES = 2
 
 
 class SubscriptionState(StrEnum):
@@ -50,6 +57,17 @@ class RunState(StrEnum):
 
 class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class WorkerOperation(StrEnum):
+    READ_FILE = "read_file"
+    LIST_FILES = "list_files"
+    SEARCH_TEXT = "search_text"
+    WRITE_FILE = "write_file"
+    APPLY_PATCH = "apply_patch"
+    RUN_COMMAND = "run_command"
+    EXPORT_PATCH = "export_patch"
+    CHECK_CONVENTIONS = "check_conventions"
 
 
 class SubscriptionStatus(_Frozen):
@@ -97,6 +115,32 @@ class RunSpec(_Frozen):
         return value
 
 
+class ToolManifest(_Frozen):
+    """The worker operations one run may use; empty means a tool-free run."""
+
+    operations: tuple[WorkerOperation, ...] = ()
+
+    @field_validator("operations")
+    @classmethod
+    def _operations_are_unique(
+        cls, value: tuple[WorkerOperation, ...]
+    ) -> tuple[WorkerOperation, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("manifest operations must be unique")
+        return value
+
+
+class RunRequest(_Frozen):
+    """A run plus the tool manifest the controller grants it.
+
+    A delivery run without a manifest is refused by the service: it never falls
+    back to a default tool set.
+    """
+
+    spec: RunSpec
+    manifest: ToolManifest | None = None
+
+
 class RunResult(_Frozen):
     """Terminal outcome. Partial text under a non-completed state is incomplete."""
 
@@ -137,17 +181,6 @@ def _bounded_text(limit: int, what: str) -> AfterValidator:
         return value
 
     return AfterValidator(check)
-
-
-class WorkerOperation(StrEnum):
-    READ_FILE = "read_file"
-    LIST_FILES = "list_files"
-    SEARCH_TEXT = "search_text"
-    WRITE_FILE = "write_file"
-    APPLY_PATCH = "apply_patch"
-    RUN_COMMAND = "run_command"
-    EXPORT_PATCH = "export_patch"
-    CHECK_CONVENTIONS = "check_conventions"
 
 
 class ReadFilePayload(_Frozen):

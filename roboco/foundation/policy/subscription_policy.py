@@ -42,6 +42,7 @@ TRUSTED_CLAUDE_ENV_NAMES: frozenset[str] = frozenset(
         "DISABLE_TELEMETRY",
         "DISABLE_ERROR_REPORTING",
         "DISABLE_AUTOUPDATER",
+        "CLAUDE_CODE_MAX_RETRIES",
     }
 )
 

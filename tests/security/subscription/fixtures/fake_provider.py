@@ -9,6 +9,11 @@ Environment:
     FAKE_TOOL_CALL  optional "<tool_name>|<json input>": on the first request
                     whose last message is not a tool_result, the fake model
                     asks the CLI to call that tool, then answers "DONE".
+    FAKE_SENTINEL   optional string; each request logs only whether it appears
+                    anywhere in the request body (a leak check, never the text).
+    FAKE_HTTP_STATUS  optional status code (401, 429, 500, 529): every messages
+                    request fails with it, so retry counts and error
+                    classification can be observed.
 """
 
 from __future__ import annotations
@@ -19,6 +24,14 @@ import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _TOOL_CALL = os.environ.get("FAKE_TOOL_CALL", "")
+_SENTINEL = os.environ.get("FAKE_SENTINEL", "")
+_HTTP_STATUS = int(os.environ.get("FAKE_HTTP_STATUS", "0") or 0)
+_ERROR_TYPES = {
+    401: "authentication_error",
+    429: "rate_limit_error",
+    500: "api_error",
+    529: "overloaded_error",
+}
 _AUTH_HEADERS = ("x-api-key", "authorization")
 
 
@@ -32,12 +45,32 @@ def _sse(event: str, data: dict) -> bytes:
 
 
 def _last_is_tool_result(messages: list) -> bool:
-    if not messages:
+    """True when the newest conversational turn is a tool result.
+
+    The CLI may append a trailing system-role message after the result, so the
+    system entries are skipped.
+    """
+    turns = [m for m in messages if m.get("role") != "system"]
+    if not turns:
         return False
-    content = messages[-1].get("content")
+    content = turns[-1].get("content")
     return isinstance(content, list) and any(
         isinstance(b, dict) and b.get("type") == "tool_result" for b in content
     )
+
+
+def _describe_last(messages: list) -> list:
+    """Role and block types of every message, to see how the CLI replays a turn."""
+    shapes = []
+    for message in messages:
+        content = message.get("content")
+        kinds = (
+            ["text"]
+            if isinstance(content, str)
+            else [b.get("type") for b in content if isinstance(b, dict)]
+        )
+        shapes.append([message.get("role"), *kinds])
+    return shapes
 
 
 def _tool_names(body: dict) -> list[str]:
@@ -97,8 +130,21 @@ class Handler(BaseHTTPRequestHandler):
                 "model": body.get("model"),
                 "stream": bool(body.get("stream")),
                 "tools": _tool_names(body),
+                "last_message": _describe_last(body.get("messages", [])),
+                "sentinel_in_request": bool(_SENTINEL)
+                and _SENTINEL in json.dumps(body),
             }
         )
+        if _HTTP_STATUS:
+            error = {
+                "type": "error",
+                "error": {
+                    "type": _ERROR_TYPES.get(_HTTP_STATUS, "api_error"),
+                    "message": "synthetic failure",
+                },
+            }
+            self._send(_HTTP_STATUS, json.dumps(error).encode())
+            return
         call = None
         if _TOOL_CALL and not _last_is_tool_result(body.get("messages", [])):
             name, _, raw_input = _TOOL_CALL.partition("|")
