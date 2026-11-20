@@ -9,6 +9,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
+# git runs only inside the worker, against the imported snapshot. The packages come
+# from the pinned base image's distribution archive (not hash-pinned; see the
+# limitations list). Package lists are removed so the layer stays minimal.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY docker/task-worker.requirements.txt /tmp/requirements.txt
 RUN pip install --require-hashes --no-deps -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt

@@ -152,6 +152,7 @@ class WorkerOperation(StrEnum):
 class ReadFilePayload(_Frozen):
     operation: Literal["read_file"] = "read_file"
     path: RelativePath
+    offset: Annotated[int, Field(ge=0, le=MAX_FILE_BYTES)] = 0
 
 
 class ListFilesPayload(_Frozen):
@@ -223,3 +224,47 @@ class WorkerResult(_Frozen):
     stderr: Annotated[str, _bounded_text(MAX_STREAM_BYTES, "stderr")]
     truncated: bool
     reason_code: str | None
+
+
+# ---------------------------------------------------------------------------
+# Workspace import: an owner-operated snapshot archive admitted inside the
+# offline worker. Only the options below can accompany the archive bytes.
+# ---------------------------------------------------------------------------
+
+MAX_ARCHIVE_BYTES = 300 * 1024 * 1024
+MAX_IMPORT_LIST_ITEMS = 256
+MAX_IMPORT_REPORT_ITEMS = 100
+IMPORT_TIMEOUT_SECONDS = 900
+IMPORT_MODE_ARGUMENT = "import"
+
+_ImportListItem = Annotated[str, Field(min_length=1, max_length=1024)]
+
+
+class ImportOptions(_Frozen):
+    """Owner choices for an import: extra deny globs and acknowledged findings."""
+
+    extra_deny_globs: Annotated[
+        tuple[_ImportListItem, ...], Field(max_length=MAX_IMPORT_LIST_ITEMS)
+    ] = ()
+    allowed_findings: Annotated[
+        tuple[_ImportListItem, ...], Field(max_length=MAX_IMPORT_LIST_ITEMS)
+    ] = ()
+
+
+class ImportFinding(_Frozen):
+    """A suspected secret by location and rule; never the matched text."""
+
+    path: str
+    rule: str
+
+
+class ImportOutcome(_Frozen):
+    ok: bool
+    reason_code: str | None = None
+    files: StrictInt = 0
+    directories: StrictInt = 0
+    total_bytes: StrictInt = 0
+    excluded: Annotated[tuple[str, ...], Field(max_length=MAX_IMPORT_REPORT_ITEMS)] = ()
+    findings: Annotated[
+        tuple[ImportFinding, ...], Field(max_length=MAX_IMPORT_REPORT_ITEMS)
+    ] = ()

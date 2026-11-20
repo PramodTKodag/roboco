@@ -14,7 +14,13 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
-from roboco.runtime.subscription.contracts import WorkerJob, WorkerResult
+from roboco.runtime.subscription.contracts import (
+    IMPORT_TIMEOUT_SECONDS,
+    ImportOptions,
+    ImportOutcome,
+    WorkerJob,
+    WorkerResult,
+)
 from roboco.runtime.subscription.launcher_protocol import (
     MAX_FRAME_BYTES,
     MAX_RESPONSE_BYTES,
@@ -30,6 +36,7 @@ logger = logging.getLogger(__name__)
 _CONNECT_TIMEOUT_SECONDS = 5.0
 # Longer than the launcher's hard worker timeout so its structured answer wins.
 _RESPONSE_TIMEOUT_SECONDS = 700.0
+_IMPORT_RESPONSE_TIMEOUT_SECONDS = IMPORT_TIMEOUT_SECONDS + 120.0
 
 
 class LauncherRequestFailed(Exception):
@@ -45,7 +52,11 @@ class _LauncherConnection:
         self._token = token
 
     async def call(
-        self, action: LauncherAction, body: dict[str, Any]
+        self,
+        action: LauncherAction,
+        body: dict[str, Any],
+        *,
+        archive: bytes | None = None,
     ) -> LauncherResponse:
         frame = json.dumps(
             {"token": self._token, "action": action.value, "body": body}
@@ -64,9 +75,14 @@ class _LauncherConnection:
             return LauncherResponse(ok=False, reason_code="launcher_unreachable")
         try:
             writer.write(frame + b"\n")
+            if archive is not None:
+                writer.write(archive)
             await writer.drain()
             line = await asyncio.wait_for(
-                reader.readuntil(b"\n"), _RESPONSE_TIMEOUT_SECONDS
+                reader.readuntil(b"\n"),
+                _RESPONSE_TIMEOUT_SECONDS
+                if archive is None
+                else _IMPORT_RESPONSE_TIMEOUT_SECONDS,
             )
             return LauncherResponse.model_validate_json(line)
         except (
@@ -110,6 +126,30 @@ class LauncherAdmin(_LauncherConnection):
         await self._require_ok(
             LauncherAction.REGISTER_WORKSPACE,
             {"workspace_handle": str(workspace_handle), "project_id": str(project_id)},
+        )
+
+    async def import_workspace(
+        self,
+        workspace_handle: UUID,
+        project_id: UUID,
+        archive: bytes,
+        options: ImportOptions | None = None,
+    ) -> ImportOutcome:
+        """Admit a snapshot archive into a new workspace; failure carries a reason."""
+        response = await self.call(
+            LauncherAction.IMPORT_WORKSPACE,
+            {
+                "workspace_handle": str(workspace_handle),
+                "project_id": str(project_id),
+                "archive_bytes": len(archive),
+                "options": (options or ImportOptions()).model_dump(mode="json"),
+            },
+            archive=archive,
+        )
+        if response.import_outcome is not None:
+            return response.import_outcome
+        return ImportOutcome(
+            ok=False, reason_code=response.reason_code or "launcher_failed"
         )
 
     async def register_run(

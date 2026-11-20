@@ -103,3 +103,22 @@ async def test_admin_failures_raise_with_the_reason_code(
     with pytest.raises(LauncherRequestFailed) as caught:
         await admin.register_run(uuid4(), uuid4(), uuid4())
     assert caught.value.reason_code == "workspace_unknown"
+
+
+async def test_admin_client_imports_an_archive_end_to_end(
+    endpoint: tuple[str, int],
+) -> None:
+    host, port = endpoint
+    admin = LauncherAdmin(host, port, ADMIN)
+    outcome = await admin.import_workspace(uuid4(), uuid4(), b"archive-bytes")
+    assert outcome.ok
+    assert outcome.files == 2  # noqa: PLR2004
+
+
+async def test_executor_token_cannot_import(endpoint: tuple[str, int]) -> None:
+    host, port = endpoint
+    outcome = await LauncherAdmin(host, port, EXECUTOR).import_workspace(
+        uuid4(), uuid4(), b"archive-bytes"
+    )
+    assert not outcome.ok
+    assert outcome.reason_code == "unauthorized"

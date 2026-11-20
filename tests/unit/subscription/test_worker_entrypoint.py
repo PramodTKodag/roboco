@@ -16,6 +16,7 @@ from roboco.runtime.subscription.contracts import (
     WorkerResult,
 )
 from roboco.runtime.subscription.worker_entrypoint import execute_job, run_stdio
+from roboco.runtime.subscription.worker_patch import init_baseline
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -84,18 +85,53 @@ async def test_timeout_kills_the_whole_process_group(tmp_path: Path) -> None:
     assert not marker.exists()
 
 
-async def test_operations_not_yet_supported_fail_explicitly(tmp_path: Path) -> None:
-    job = WorkerJob(
+def _file_job(operation: str, **fields: object) -> WorkerJob:
+    return WorkerJob(
         job_id=uuid4(),
         run_id=uuid4(),
         project_id=uuid4(),
         workspace_handle=uuid4(),
-        operation=WorkerOperation.EXPORT_PATCH,
-        payload={"operation": "export_patch"},  # type: ignore[arg-type]
+        operation=WorkerOperation(operation),
+        payload={"operation": operation, **fields},  # type: ignore[arg-type]
     )
-    result = await execute_job(job, tmp_path, 10)
-    assert result.reason_code == "operation_unsupported"
-    assert result.exit_code is None
+
+
+async def test_file_operations_dispatch_to_the_safe_file_layer(
+    tmp_path: Path,
+) -> None:
+    written = await execute_job(
+        _file_job("write_file", path="src/a.txt", content="hello needle\n"),
+        tmp_path,
+        10,
+    )
+    assert written.reason_code is None
+    read = await execute_job(_file_job("read_file", path="src/a.txt"), tmp_path, 10)
+    assert read.stdout == "hello needle\n"
+    listed = await execute_job(_file_job("list_files", path="."), tmp_path, 10)
+    assert listed.stdout == "src/"
+    found = await execute_job(
+        _file_job("search_text", pattern="needle", path="."), tmp_path, 10
+    )
+    assert found.stdout == "src/a.txt:1:hello needle"
+
+
+async def test_refused_file_operations_return_reason_codes_not_exceptions(
+    tmp_path: Path,
+) -> None:
+    denied = await execute_job(_file_job("read_file", path=".env"), tmp_path, 10)
+    assert denied.reason_code == "path_denied"
+    assert denied.exit_code is None
+    missing = await execute_job(_file_job("read_file", path="nope"), tmp_path, 10)
+    assert missing.reason_code == "not_found"
+
+
+async def test_export_patch_runs_against_the_local_baseline(tmp_path: Path) -> None:
+    (tmp_path / "a.txt").write_text("one\n")
+    init_baseline(tmp_path)
+    (tmp_path / "a.txt").write_text("two\n")
+    result = await execute_job(_file_job("export_patch"), tmp_path, 10)
+    assert "+two" in result.stdout
+    assert result.reason_code is None
 
 
 async def test_stdio_round_trip_returns_one_result_line(tmp_path: Path) -> None:

@@ -7,6 +7,7 @@ import json
 from datetime import timedelta
 from uuid import UUID, uuid4
 
+import pytest
 from roboco.runtime.subscription.contracts import WorkerResult
 from roboco.runtime.subscription.launcher_policy import (
     ClientAuthenticator,
@@ -28,12 +29,19 @@ class FakeDocker:
         self.killed: list[str] = []
         self.release = asyncio.Event()
         self.started = asyncio.Event()
+        self.import_stdout = b'{"ok":true,"files":2,"directories":1,"total_bytes":9}'
+        self.import_stdin: bytes = b""
+        self.volumes: set[str] = set()
+        self.removed_volumes: list[str] = []
 
     async def run_worker(
         self, argv: list[str], stdin: bytes, timeout_seconds: float
     ) -> WorkerRun:
         self.argvs.append(argv)
         self.started.set()
+        if argv[-1] == "import":
+            self.import_stdin = stdin
+            return WorkerRun(returncode=0, stdout=self.import_stdout, timed_out=False)
         if self.hang:
             try:
                 await asyncio.wait_for(self.release.wait(), timeout_seconds)
@@ -62,6 +70,13 @@ class FakeDocker:
     async def list_owned_containers(self, run_id: UUID | None = None) -> list[str]:
         del run_id
         return []
+
+    async def volume_exists(self, name: str) -> bool:
+        return name in self.volumes
+
+    async def remove_volume(self, name: str) -> None:
+        self.removed_volumes.append(name)
+        self.volumes.discard(name)
 
 
 def _launcher(
@@ -255,3 +270,194 @@ async def test_queue_is_bounded() -> None:
     assert (third.ok, third.reason_code) == (False, "queue_full")
     docker.release.set()
     await asyncio.gather(first, second)
+
+
+# ---------------------------------------------------------------------------
+# Workspace import
+# ---------------------------------------------------------------------------
+
+ARCHIVE = b"tar-bytes-never-parsed-by-the-launcher"
+
+
+def _import_frame(
+    token: str, workspace: UUID, project: UUID, size: int, **options: object
+) -> bytes:
+    return _frame(
+        token,
+        "import_workspace",
+        {
+            "workspace_handle": str(workspace),
+            "project_id": str(project),
+            "archive_bytes": size,
+            "options": options,
+        },
+    )
+
+
+async def _body(data: bytes, size: int) -> bytes:
+    assert size == len(data)
+    return data
+
+
+def _reader(data: bytes = ARCHIVE):  # type: ignore[no-untyped-def]
+    async def read(size: int) -> bytes:
+        return await _body(data, size)
+
+    return read
+
+
+async def test_import_runs_the_fixed_profile_worker_and_registers_the_workspace() -> (
+    None
+):
+    docker = FakeDocker()
+    launcher = _launcher(docker)
+    project, workspace = uuid4(), uuid4()
+    response = await launcher.handle_frame(
+        _import_frame(ADMIN, workspace, project, len(ARCHIVE)), _reader()
+    )
+    assert response.ok
+    assert response.import_outcome is not None
+    assert response.import_outcome.files == 2  # noqa: PLR2004
+    argv = docker.argvs[0]
+    assert argv[-1] == "import"
+    assert argv[argv.index("--network") + 1] == "none"
+    assert f"src=roboco_ws_{workspace.hex},dst=/workspace" in " ".join(argv)
+    assert docker.import_stdin.endswith(b"\n" + ARCHIVE)
+    # now a run can be registered against the imported workspace
+    run = uuid4()
+    registered = await launcher.handle_frame(
+        _frame(
+            ADMIN,
+            "register_run",
+            {
+                "run_id": str(run),
+                "project_id": str(project),
+                "workspace_handle": str(workspace),
+            },
+        )
+    )
+    assert registered.ok
+
+
+async def test_import_requires_the_admin_token() -> None:
+    docker = FakeDocker()
+    launcher = _launcher(docker)
+    response = await launcher.handle_frame(
+        _import_frame(EXECUTOR, uuid4(), uuid4(), len(ARCHIVE)), _reader()
+    )
+    assert response.reason_code == "unauthorized"
+    assert not docker.argvs
+
+
+async def test_import_never_reads_the_body_before_authorization() -> None:
+    launcher = _launcher(FakeDocker())
+
+    async def must_not_read(_size: int) -> bytes:
+        raise AssertionError("body read before authorization")
+
+    response = await launcher.handle_frame(
+        _import_frame("x" * 30, uuid4(), uuid4(), 10), must_not_read
+    )
+    assert response.reason_code == "unauthorized"
+
+
+async def test_import_refuses_an_existing_or_registered_workspace() -> None:
+    docker = FakeDocker()
+    launcher = _launcher(docker)
+    project, workspace = uuid4(), uuid4()
+    docker.volumes.add(f"roboco_ws_{workspace.hex}")
+    refused = await launcher.handle_frame(
+        _import_frame(ADMIN, workspace, project, len(ARCHIVE)), _reader()
+    )
+    assert refused.reason_code == "workspace_exists"
+    assert not docker.removed_volumes  # a pre-existing volume is never removed
+    assert not docker.argvs
+
+
+async def test_refused_import_removes_the_volume_and_registers_nothing() -> None:
+    docker = FakeDocker()
+    docker.import_stdout = (
+        b'{"ok":false,"reason_code":"secrets_suspected",'
+        b'"findings":[{"path":"a.txt","rule":"anthropic_key"}]}'
+    )
+    launcher = _launcher(docker)
+    project, workspace = uuid4(), uuid4()
+    response = await launcher.handle_frame(
+        _import_frame(ADMIN, workspace, project, len(ARCHIVE)), _reader()
+    )
+    assert not response.ok
+    assert response.reason_code == "secrets_suspected"
+    assert response.import_outcome is not None
+    assert response.import_outcome.findings[0].rule == "anthropic_key"
+    assert docker.removed_volumes == [f"roboco_ws_{workspace.hex}"]
+    run = await launcher.handle_frame(
+        _frame(
+            ADMIN,
+            "register_run",
+            {
+                "run_id": str(uuid4()),
+                "project_id": str(project),
+                "workspace_handle": str(workspace),
+            },
+        )
+    )
+    assert run.reason_code == "workspace_unknown"
+
+
+async def test_garbled_worker_output_and_timeout_fail_closed_and_clean_up() -> None:
+    docker = FakeDocker()
+    docker.import_stdout = b"not json"
+    launcher = _launcher(docker)
+    workspace = uuid4()
+    response = await launcher.handle_frame(
+        _import_frame(ADMIN, workspace, uuid4(), len(ARCHIVE)), _reader()
+    )
+    assert response.reason_code == "import_result_invalid"
+    assert docker.removed_volumes == [f"roboco_ws_{workspace.hex}"]
+
+
+async def test_truncated_archive_body_is_refused_and_cleaned_up() -> None:
+    docker = FakeDocker()
+    launcher = _launcher(docker)
+
+    async def short(size: int) -> bytes:
+        raise asyncio.IncompleteReadError(b"", size)
+
+    workspace = uuid4()
+    response = await launcher.handle_frame(
+        _import_frame(ADMIN, workspace, uuid4(), 10), short
+    )
+    assert response.reason_code == "archive_incomplete"
+    assert not docker.argvs
+
+
+async def test_import_frame_without_a_body_channel_is_refused() -> None:
+    launcher = _launcher(FakeDocker())
+    response = await launcher.handle_frame(_import_frame(ADMIN, uuid4(), uuid4(), 10))
+    assert response.reason_code == "archive_body_unavailable"
+
+
+@pytest.mark.parametrize(
+    "bad_options",
+    [
+        {"image": "evil"},
+        {"extra_deny_globs": "not-a-list"},
+        {"allowed_findings": [""]},
+    ],
+)
+async def test_import_options_cannot_carry_anything_but_the_two_lists(
+    bad_options: dict[str, object],
+) -> None:
+    docker = FakeDocker()
+    response = await _launcher(docker).handle_frame(
+        _import_frame(ADMIN, uuid4(), uuid4(), 10, **bad_options), _reader()
+    )
+    assert response.reason_code == "frame_invalid"
+    assert not docker.argvs
+
+
+async def test_archive_size_is_bounded_by_the_protocol() -> None:
+    response = await _launcher(FakeDocker()).handle_frame(
+        _import_frame(ADMIN, uuid4(), uuid4(), 10**12), _reader()
+    )
+    assert response.reason_code == "frame_invalid"

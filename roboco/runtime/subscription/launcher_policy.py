@@ -13,7 +13,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from roboco.runtime.subscription.contracts import COMMAND_TIMEOUT_SECONDS
+from roboco.runtime.subscription.contracts import (
+    COMMAND_TIMEOUT_SECONDS,
+    IMPORT_MODE_ARGUMENT,
+    IMPORT_TIMEOUT_SECONDS,
+)
 from roboco.runtime.subscription.launcher_protocol import LauncherAction
 
 if TYPE_CHECKING:
@@ -26,6 +30,7 @@ logger = logging.getLogger(__name__)
 WORKER_LABEL = "roboco.personal.worker"
 RUN_LABEL = "roboco.personal.run"
 JOB_LABEL = "roboco.personal.job"
+IMPORT_LABEL = "roboco.personal.import"
 WORKSPACE_MOUNT = "/workspace"
 VOLUME_PREFIX = "roboco_ws_"
 MIN_TOKEN_LENGTH = 24
@@ -53,6 +58,7 @@ class LauncherConfig:
     tmpfs_size: str = "256m"
     command_timeout_seconds: int = COMMAND_TIMEOUT_SECONDS
     hard_kill_grace_seconds: int = 30
+    import_timeout_seconds: int = IMPORT_TIMEOUT_SECONDS
 
     def __post_init__(self) -> None:
         if self.runtime not in ALLOWED_WORKER_RUNTIMES:
@@ -85,6 +91,9 @@ class LauncherRegistry:
         self._max_runs = max_runs
         self._workspaces: dict[UUID, UUID] = {}
         self._runs: dict[UUID, _RunRecord] = {}
+
+    def has_workspace(self, workspace_handle: UUID) -> bool:
+        return workspace_handle in self._workspaces
 
     def register_workspace(self, workspace_handle: UUID, project_id: UUID) -> None:
         owner = self._workspaces.setdefault(workspace_handle, project_id)
@@ -141,7 +150,7 @@ class LauncherRegistry:
         record.seen_jobs.add(job.job_id)
         return AuthorizedJob(
             job=job,
-            volume_name=f"{VOLUME_PREFIX}{job.workspace_handle.hex}",
+            volume_name=volume_name_for(job.workspace_handle),
             container_name=f"roboco-worker-{uuid4().hex[:16]}",
         )
 
@@ -166,6 +175,7 @@ class ClientAuthenticator:
                     {
                         LauncherAction.HEALTH,
                         LauncherAction.REGISTER_WORKSPACE,
+                        LauncherAction.IMPORT_WORKSPACE,
                         LauncherAction.REGISTER_RUN,
                         LauncherAction.CANCEL_RUN,
                     }
@@ -185,11 +195,23 @@ class ClientAuthenticator:
         return allowed
 
 
-def build_worker_run_argv(
-    config: LauncherConfig, authorized: AuthorizedJob
+def volume_name_for(workspace_handle: UUID) -> str:
+    return f"{VOLUME_PREFIX}{workspace_handle.hex}"
+
+
+def import_container_name(import_id: UUID) -> str:
+    return f"roboco-import-{import_id.hex[:16]}"
+
+
+def _fixed_profile_argv(
+    config: LauncherConfig,
+    *,
+    container_name: str,
+    labels: tuple[str, ...],
+    volume_name: str,
 ) -> list[str]:
-    """Docker argv for one disposable worker: constants plus derived identifiers."""
-    job = authorized.job
+    """The one security profile every worker container starts with."""
+    label_args = [arg for label in labels for arg in ("--label", label)]
     return [
         "docker",
         "run",
@@ -197,13 +219,10 @@ def build_worker_run_argv(
         "--interactive",
         "--init",
         "--name",
-        authorized.container_name,
+        container_name,
         "--label",
         f"{WORKER_LABEL}=1",
-        "--label",
-        f"{RUN_LABEL}={job.run_id}",
-        "--label",
-        f"{JOB_LABEL}={job.job_id}",
+        *label_args,
         "--runtime",
         config.runtime,
         "--network",
@@ -228,6 +247,32 @@ def build_worker_run_argv(
         "--tmpfs",
         f"/tmp:rw,nosuid,nodev,size={config.tmpfs_size}",  # nosec B108
         "--mount",
-        f"type=volume,src={authorized.volume_name},dst={WORKSPACE_MOUNT}",
+        f"type=volume,src={volume_name},dst={WORKSPACE_MOUNT}",
         config.image,
     ]
+
+
+def build_worker_run_argv(
+    config: LauncherConfig, authorized: AuthorizedJob
+) -> list[str]:
+    """Docker argv for one disposable worker: constants plus derived identifiers."""
+    job = authorized.job
+    return _fixed_profile_argv(
+        config,
+        container_name=authorized.container_name,
+        labels=(f"{RUN_LABEL}={job.run_id}", f"{JOB_LABEL}={job.job_id}"),
+        volume_name=authorized.volume_name,
+    )
+
+
+def build_import_run_argv(
+    config: LauncherConfig, workspace_handle: UUID, import_id: UUID
+) -> list[str]:
+    """Same fixed profile; the trailing ``import`` selects the worker's import mode."""
+    argv = _fixed_profile_argv(
+        config,
+        container_name=import_container_name(import_id),
+        labels=(f"{IMPORT_LABEL}={import_id}",),
+        volume_name=volume_name_for(workspace_handle),
+    )
+    return [*argv, IMPORT_MODE_ARGUMENT]

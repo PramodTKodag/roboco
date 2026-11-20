@@ -13,10 +13,11 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
+from uuid import uuid4
 
 from pydantic import ValidationError
 
-from roboco.runtime.subscription.contracts import WorkerResult
+from roboco.runtime.subscription.contracts import ImportOutcome, WorkerResult
 from roboco.runtime.subscription.launcher_policy import (
     RUN_LABEL,
     WORKER_LABEL,
@@ -24,7 +25,10 @@ from roboco.runtime.subscription.launcher_policy import (
     JobRejection,
     LauncherConfig,
     LauncherRegistry,
+    build_import_run_argv,
     build_worker_run_argv,
+    import_container_name,
+    volume_name_for,
 )
 from roboco.runtime.subscription.launcher_protocol import (
     MAX_FRAME_BYTES,
@@ -32,6 +36,7 @@ from roboco.runtime.subscription.launcher_protocol import (
     CancelRunFrame,
     ExecuteFrame,
     HealthFrame,
+    ImportWorkspaceFrame,
     LauncherResponse,
     ProtocolError,
     RegisterRunFrame,
@@ -41,6 +46,7 @@ from roboco.runtime.subscription.launcher_protocol import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from uuid import UUID
 
     from roboco.runtime.subscription.launcher_protocol import LauncherFrame
@@ -52,6 +58,8 @@ DEFAULT_MAX_PENDING = 16
 RUN_TTL = timedelta(minutes=45)
 _FRAME_READ_TIMEOUT_SECONDS = 10.0
 _DOCKER_CLI_TIMEOUT_SECONDS = 30.0
+_VOLUME_REMOVE_ATTEMPTS = 5
+_VOLUME_REMOVE_PAUSE_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -69,6 +77,10 @@ class DockerAdapter(Protocol):
     async def kill_containers(self, names: list[str]) -> None: ...
 
     async def list_owned_containers(self, run_id: UUID | None = None) -> list[str]: ...
+
+    async def volume_exists(self, name: str) -> bool: ...
+
+    async def remove_volume(self, name: str) -> None: ...
 
 
 class DockerCli:
@@ -123,6 +135,21 @@ class DockerCli:
         output = await self._docker(["ps", "--quiet", "--no-trunc", *filters])
         return output.split()
 
+    async def volume_exists(self, name: str) -> bool:
+        listing = await self._docker(
+            ["volume", "ls", "--quiet", "--filter", f"name={name}"]
+        )
+        return name in listing.split()
+
+    async def remove_volume(self, name: str) -> None:
+        # An auto-removed worker container can still be releasing the volume.
+        for _ in range(_VOLUME_REMOVE_ATTEMPTS):
+            await self._docker(["volume", "rm", "--force", name])
+            if not await self.volume_exists(name):
+                return
+            await asyncio.sleep(_VOLUME_REMOVE_PAUSE_SECONDS)
+        logger.error("Could not remove workspace volume %s", name)
+
     @staticmethod
     async def _docker(args: list[str]) -> str:
         process = await asyncio.create_subprocess_exec(
@@ -166,8 +193,13 @@ class Launcher:
             config.command_timeout_seconds + config.hard_kill_grace_seconds
         )
         self._inflight: dict[UUID, set[str]] = {}
+        self._importing: set[UUID] = set()
 
-    async def handle_frame(self, raw: bytes) -> LauncherResponse:
+    async def handle_frame(
+        self,
+        raw: bytes,
+        read_body: Callable[[int], Awaitable[bytes]] | None = None,
+    ) -> LauncherResponse:
         try:
             frame = parse_frame(raw)
         except ProtocolError as exc:
@@ -176,6 +208,8 @@ class Launcher:
             logger.warning("Launcher request refused: unauthorized action")
             return LauncherResponse(ok=False, reason_code="unauthorized")
         try:
+            if isinstance(frame, ImportWorkspaceFrame):
+                return await self._import_workspace(frame, read_body)
             return await self._dispatch(frame)
         except JobRejection as rejection:
             logger.info("Launcher rejected request: %s", rejection.reason_code)
@@ -204,6 +238,62 @@ class Launcher:
         if not isinstance(frame, ExecuteFrame):
             raise JobRejection("frame_invalid")
         return await self._execute(frame, now)
+
+    async def _import_workspace(
+        self,
+        frame: ImportWorkspaceFrame,
+        read_body: Callable[[int], Awaitable[bytes]] | None,
+    ) -> LauncherResponse:
+        body = frame.body
+        handle = body.workspace_handle
+        if read_body is None:
+            raise JobRejection("archive_body_unavailable")
+        volume = volume_name_for(handle)
+        if (
+            self._registry.has_workspace(handle)
+            or handle in self._importing
+            or await self._docker.volume_exists(volume)
+        ):
+            raise JobRejection("workspace_exists")
+        self._importing.add(handle)
+        try:
+            outcome = await self._run_import(frame, read_body)
+        finally:
+            self._importing.discard(handle)
+        if not outcome.ok:
+            await self._docker.remove_volume(volume)
+            logger.info("Import refused: %s", outcome.reason_code)
+            return LauncherResponse(
+                ok=False, reason_code=outcome.reason_code, import_outcome=outcome
+            )
+        self._registry.register_workspace(handle, body.project_id)
+        logger.info("Import admitted: %d files", outcome.files)
+        return LauncherResponse(ok=True, import_outcome=outcome)
+
+    async def _run_import(
+        self,
+        frame: ImportWorkspaceFrame,
+        read_body: Callable[[int], Awaitable[bytes]],
+    ) -> ImportOutcome:
+        body = frame.body
+        try:
+            archive = await read_body(body.archive_bytes)
+        except (asyncio.IncompleteReadError, TimeoutError, ConnectionError):
+            return ImportOutcome(ok=False, reason_code="archive_incomplete")
+        import_id = uuid4()
+        argv = build_import_run_argv(self._config, body.workspace_handle, import_id)
+        stdin = body.options.model_dump_json().encode() + b"\n" + archive
+        async with self._slots:
+            run = await self._docker.run_worker(
+                argv, stdin, float(self._config.import_timeout_seconds)
+            )
+        if run.timed_out:
+            await self._docker.kill_containers([import_container_name(import_id)])
+            return ImportOutcome(ok=False, reason_code="import_timeout")
+        try:
+            return ImportOutcome.model_validate_json(run.stdout)
+        except ValidationError:
+            return ImportOutcome(ok=False, reason_code="import_result_invalid")
 
     async def _cancel(self, run_id: UUID) -> None:
         self._registry.cancel_run(run_id)
@@ -269,6 +359,16 @@ class Launcher:
         async with server:
             await server.serve_forever()
 
+    def _body_reader(
+        self, reader: asyncio.StreamReader
+    ) -> Callable[[int], Awaitable[bytes]]:
+        async def read_body(size: int) -> bytes:
+            return await asyncio.wait_for(
+                reader.readexactly(size), self._config.import_timeout_seconds
+            )
+
+        return read_body
+
     async def _handle_connection(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
@@ -277,7 +377,9 @@ class Launcher:
                 raw = await asyncio.wait_for(
                     reader.readuntil(b"\n"), _FRAME_READ_TIMEOUT_SECONDS
                 )
-                response = await self.handle_frame(raw.rstrip(b"\n"))
+                response = await self.handle_frame(
+                    raw.rstrip(b"\n"), self._body_reader(reader)
+                )
             except (
                 asyncio.LimitOverrunError,
                 asyncio.IncompleteReadError,

@@ -18,3 +18,20 @@ After you have done the above, record a local acknowledgement. It stores only a 
 ## Dedicated login
 
 The runtime uses its own Linux-side Claude profile in a dedicated volume. Do not copy your personal Keychain entry or home directory into it. The login step is added with the Claude service image.
+
+## Importing a project into a worker workspace
+
+Project code only ever runs in offline workers, on a copy you import first. The import never contacts a model and never uses a forge credential.
+
+1. Start the launcher and build the worker image (see the deployment steps added with the launcher compose file). Point `ROBOCO_LAUNCHER_ADMIN_TOKEN_FILE` at the admin token file; the token is never accepted on the command line.
+2. Preview what would be copied, without contacting the launcher:
+
+   ```text
+   python scripts/personal/import_workspace.py --source /path/to/project --project-id <uuid> --dry-run
+   ```
+
+3. Review the omitted list. Fixed credential and config paths (`.git`, `.env`, `.ssh`, `.aws`, key and certificate files, database files and similar) are always left out, and symlinks, special files and oversized files are skipped. Add `--exclude GLOB` to leave out more; nothing can be removed from the fixed list.
+4. Run the same command without `--dry-run`. If the worker suspects a secret in a file, the import stops and prints the file and rule name only. Remove the secret from the project, or accept that exact finding with `--allow PATH:RULE`.
+5. The command prints the workspace handle. A handle can be imported only once; to refresh a project, import it again under a new handle.
+
+The worker creates a fresh local git baseline from the imported files, so the original history, remotes and hooks are never present. Edits come back out as a patch against that baseline, which you review before applying to your real checkout.

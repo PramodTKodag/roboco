@@ -16,7 +16,10 @@ from uuid import UUID  # noqa: TC003 - pydantic resolves annotations at runtime
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from roboco.runtime.subscription.contracts import (
+    MAX_ARCHIVE_BYTES,
     MAX_FILE_BYTES,
+    ImportOptions,
+    ImportOutcome,
     WorkerJob,
     WorkerResult,
 )
@@ -32,6 +35,7 @@ class ProtocolError(ValueError):
 class LauncherAction(StrEnum):
     HEALTH = "health"
     REGISTER_WORKSPACE = "register_workspace"
+    IMPORT_WORKSPACE = "import_workspace"
     REGISTER_RUN = "register_run"
     CANCEL_RUN = "cancel_run"
     EXECUTE = "execute"
@@ -48,6 +52,15 @@ class HealthBody(_Body):
 class RegisterWorkspaceBody(_Body):
     workspace_handle: UUID
     project_id: UUID
+
+
+class ImportWorkspaceBody(_Body):
+    """Header of an import; exactly ``archive_bytes`` raw bytes follow the frame."""
+
+    workspace_handle: UUID
+    project_id: UUID
+    archive_bytes: Annotated[int, Field(ge=1, le=MAX_ARCHIVE_BYTES)]
+    options: ImportOptions = ImportOptions()
 
 
 class RegisterRunBody(_Body):
@@ -79,6 +92,11 @@ class RegisterWorkspaceFrame(_Frame):
     body: RegisterWorkspaceBody
 
 
+class ImportWorkspaceFrame(_Frame):
+    action: Literal[LauncherAction.IMPORT_WORKSPACE]
+    body: ImportWorkspaceBody
+
+
 class RegisterRunFrame(_Frame):
     action: Literal[LauncherAction.REGISTER_RUN]
     body: RegisterRunBody
@@ -97,6 +115,7 @@ class ExecuteFrame(_Frame):
 LauncherFrame = Annotated[
     HealthFrame
     | RegisterWorkspaceFrame
+    | ImportWorkspaceFrame
     | RegisterRunFrame
     | CancelRunFrame
     | ExecuteFrame,
@@ -126,6 +145,7 @@ class LauncherResponse(BaseModel):
     ok: bool
     reason_code: str | None = None
     result: WorkerResult | None = None
+    import_outcome: ImportOutcome | None = None
 
 
 def encode_response(response: LauncherResponse) -> bytes:

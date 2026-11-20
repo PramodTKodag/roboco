@@ -481,7 +481,7 @@ class ProbeSandbox:
             "--memory",
             "1g",
             "--tmpfs",
-            "/tmp",
+            "/tmp",  # nosec B108
             "--tmpfs",
             "/home/probe:uid=1000,gid=1000",
             "--user",

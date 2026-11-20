@@ -16,23 +16,47 @@ import os
 import signal
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, TextIO
+from typing import BinaryIO, TextIO
 from uuid import UUID
 
 from pydantic import ValidationError
 
 from roboco.runtime.subscription.contracts import (
     COMMAND_TIMEOUT_SECONDS,
+    IMPORT_MODE_ARGUMENT,
+    MAX_IMPORT_REPORT_ITEMS,
     MAX_STREAM_BYTES,
+    ApplyPatchPayload,
+    ExportPatchPayload,
+    ImportFinding,
+    ImportOptions,
+    ImportOutcome,
+    ListFilesPayload,
+    ReadFilePayload,
     RunCommandPayload,
+    SearchTextPayload,
     WorkerJob,
-    WorkerOperation,
     WorkerResult,
+    WriteFilePayload,
 )
 from roboco.runtime.subscription.launcher_protocol import MAX_FRAME_BYTES
-
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+from roboco.runtime.subscription.worker_files import (
+    FileOutput,
+    WorkspaceFileError,
+    list_files,
+    read_file,
+    search_text,
+    write_file,
+)
+from roboco.runtime.subscription.worker_patch import (
+    apply_patch,
+    export_patch,
+    init_baseline,
+)
+from roboco.runtime.subscription.workspace_admission import (
+    AdmissionRefused,
+    admit_archive,
+)
 
 logger = logging.getLogger("roboco.worker")
 
@@ -130,21 +154,57 @@ async def _run_command(
     )
 
 
+def _file_result(job_id: UUID, output: FileOutput) -> WorkerResult:
+    text = _decode_bounded(output.text.encode("utf-8"))
+    return WorkerResult(
+        job_id=job_id,
+        exit_code=0,
+        stdout=text,
+        stderr="",
+        truncated=output.truncated or text != output.text,
+        reason_code=None,
+    )
+
+
+def _write(workspace: Path, payload: WriteFilePayload) -> FileOutput:
+    write_file(workspace, payload.path, payload.content)
+    return FileOutput("written")
+
+
+def _file_operation(job: WorkerJob, workspace: Path) -> FileOutput | None:
+    """Run a non-command operation synchronously; None when it is not one."""
+    payload = job.payload
+    output: FileOutput | None = None
+    match payload:
+        case ReadFilePayload():
+            output = read_file(workspace, payload.path, payload.offset)
+        case ListFilesPayload():
+            output = list_files(workspace, payload.path)
+        case SearchTextPayload():
+            output = search_text(workspace, payload.pattern, payload.path)
+        case WriteFilePayload():
+            output = _write(workspace, payload)
+        case ApplyPatchPayload():
+            output = apply_patch(workspace, payload.patch)
+        case ExportPatchPayload():
+            output = export_patch(workspace)
+    return output
+
+
 async def execute_job(
     job: WorkerJob, workspace: Path, timeout_seconds: float
 ) -> WorkerResult:
-    """Run one validated job. Unsupported operations fail explicitly."""
-    handlers: dict[WorkerOperation, Callable[[], Awaitable[WorkerResult]]] = {}
+    """Run one validated job. Every refusal is a structured reason code."""
     payload = job.payload
     if isinstance(payload, RunCommandPayload):
-        command = payload.command
-        handlers[WorkerOperation.RUN_COMMAND] = lambda: _run_command(
-            job, command, workspace, timeout_seconds
-        )
-    handler = handlers.get(job.operation)
-    if handler is None:
+        return await _run_command(job, payload.command, workspace, timeout_seconds)
+    try:
+        output = await asyncio.to_thread(_file_operation, job, workspace)
+    except WorkspaceFileError as error:
+        return _failure(job.job_id, error.reason_code)
+    if output is None:
         return _failure(job.job_id, "operation_unsupported")
-    return await handler()
+    return _file_result(job.job_id, output)
 
 
 async def run_stdio(
@@ -165,7 +225,60 @@ async def run_stdio(
     stdout.flush()
 
 
+def _import_failure(reason_code: str) -> ImportOutcome:
+    return ImportOutcome(ok=False, reason_code=reason_code)
+
+
+def run_import(stdin: BinaryIO, stdout: TextIO, workspace: Path) -> None:
+    """Import mode: an options line, then a tar stream, into the empty workspace."""
+    try:
+        options = ImportOptions.model_validate_json(stdin.readline(MAX_FRAME_BYTES + 1))
+    except ValidationError:
+        outcome = _import_failure("import_options_invalid")
+    else:
+        outcome = _admit_and_baseline(stdin, workspace, options)
+    stdout.write(outcome.model_dump_json())
+    stdout.write("\n")
+    stdout.flush()
+
+
+def _admit_and_baseline(
+    stream: BinaryIO, workspace: Path, options: ImportOptions
+) -> ImportOutcome:
+    try:
+        report = admit_archive(
+            stream,
+            workspace,
+            extra_deny_globs=options.extra_deny_globs,
+            allowed_findings=frozenset(options.allowed_findings),
+        )
+        init_baseline(workspace)
+    except AdmissionRefused as refused:
+        return ImportOutcome(
+            ok=False,
+            reason_code=refused.reason_code,
+            findings=tuple(
+                ImportFinding(path=f.path, rule=f.rule)
+                for f in refused.findings[:MAX_IMPORT_REPORT_ITEMS]
+            ),
+        )
+    except WorkspaceFileError as error:
+        return _import_failure(error.reason_code)
+    except ValueError:
+        return _import_failure("import_options_invalid")
+    return ImportOutcome(
+        ok=True,
+        files=report.files,
+        directories=report.directories,
+        total_bytes=report.total_bytes,
+        excluded=tuple(report.excluded),
+    )
+
+
 def main() -> None:
+    if sys.argv[1:] == [IMPORT_MODE_ARGUMENT]:
+        run_import(sys.stdin.buffer, sys.stdout, WORKSPACE)
+        return
     asyncio.run(run_stdio(sys.stdin, sys.stdout, WORKSPACE, COMMAND_TIMEOUT_SECONDS))
 
 
