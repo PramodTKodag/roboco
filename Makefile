@@ -80,6 +80,48 @@ infra-down:
 quickstart:
 	@./scripts/bootstrap.sh
 
+# =============================================================================
+# PERSONAL DEPLOYMENT (the only supported way to run this fork)
+# =============================================================================
+# Every target runs the preflight in scripts/personal/stack.py first: it refuses
+# to continue when a provider credential or override is set in the shell. Stop
+# never deletes a volume, the subscription login or a workspace.
+PERSONAL_STACK = uv run python scripts/personal/stack.py
+
+# Fetch and verify the pinned official CLI (maintenance step, no credentials).
+.PHONY: personal-stage
+personal-stage:
+	@$(PERSONAL_STACK) stage
+
+# Build the pinned images and start the stack on 127.0.0.1:3000.
+.PHONY: personal-up
+personal-up:
+	@$(PERSONAL_STACK) up
+
+.PHONY: personal-status
+personal-status:
+	@$(PERSONAL_STACK) status
+
+# Owner-terminal subscription login. Never callable by a task or model tool.
+.PHONY: personal-login
+personal-login:
+	@$(PERSONAL_STACK) login
+
+# Static policy checks and the subscription test suites.
+.PHONY: personal-check
+personal-check:
+	@$(PERSONAL_STACK) check
+
+# Write a task's accepted review patches: make personal-export TASK=<id> OUT=<dir>
+.PHONY: personal-export
+personal-export:
+	@test -n "$(TASK)" -a -n "$(OUT)" || { echo "usage: make personal-export TASK=<task id> OUT=<directory>"; exit 2; }
+	@$(PERSONAL_STACK) export "$(TASK)" "$(OUT)"
+
+.PHONY: personal-stop
+personal-stop:
+	@$(PERSONAL_STACK) stop
+
 # Run database migrations
 .PHONY: migrate
 migrate:

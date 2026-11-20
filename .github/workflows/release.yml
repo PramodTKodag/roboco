@@ -13,6 +13,9 @@ on:
 jobs:
   publish-images:
     name: Build & push all RoboCo images to GHCR + Docker Hub
+    # Only the upstream project publishes these registry images; a fork must
+    # not push to, or claim artifacts in, another owner's namespace.
+    if: github.repository == 'rennf93/roboco'
     runs-on: ubuntu-latest
     permissions:
       contents: read
