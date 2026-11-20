@@ -40,7 +40,8 @@ RUN test -n "${CLAUDE_CLI_SHA256}" \
 # except the tmpfs mounts the deployment adds for /run/roboco and /tmp.
 RUN groupadd --gid 10002 claude \
     && useradd --uid 10002 --gid 10002 --home-dir /home/claude --create-home --shell /usr/sbin/nologin claude \
-    && install -d -m 0555 -o root -g root /var/lib/roboco/empty
+    && install -d -m 0555 -o root -g root /var/lib/roboco/empty \
+    && install -d -m 0700 -o claude -g claude /home/claude/.claude
 
 USER 10002:10002
 # `/` keeps any file in the working directory off the interpreter's import path.

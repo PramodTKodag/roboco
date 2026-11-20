@@ -138,3 +138,6 @@ docs/internal/
 
 # Staged official CLI artifacts for contract probes (verified downloads; never commit)
 .probe-cache/
+
+# Personal deployment state: generated secrets and derived environment.
+.personal/

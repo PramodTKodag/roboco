@@ -1,0 +1,8 @@
+*
+!panel
+panel/node_modules
+panel/.next
+panel/out
+panel/coverage
+panel/tsconfig.tsbuildinfo
+panel/.env*

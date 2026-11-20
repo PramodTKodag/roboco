@@ -55,3 +55,7 @@ docs/internal/
 .idea
 .vscode
 .DS_Store
+
+# Personal deployment state (secrets) never enters a build context.
+.personal/
+.probe-cache/

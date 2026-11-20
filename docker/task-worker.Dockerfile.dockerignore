@@ -1,0 +1,12 @@
+*
+!docker/task-worker.requirements.txt
+!roboco/__init__.py
+!roboco/config.py
+!roboco/exceptions.py
+!roboco/logging.py
+!roboco/foundation
+!roboco/conventions
+!roboco/runtime/__init__.py
+!roboco/runtime/subscription
+**/__pycache__
+**/*.pyc

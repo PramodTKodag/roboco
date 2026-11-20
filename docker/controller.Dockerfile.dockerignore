@@ -1,0 +1,14 @@
+# Allowlist: only what the controller image copies. Nothing else in the working
+# tree (credentials, .env files, .git, local data) is sent to the builder.
+*
+!pyproject.toml
+!uv.lock
+!README.md
+!roboco
+!agents
+!docs/rag
+!docs/map
+!alembic.ini
+!alembic
+**/__pycache__
+**/*.pyc

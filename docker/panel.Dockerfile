@@ -6,7 +6,7 @@
 # =============================================================================
 # Base stage
 # =============================================================================
-FROM node:22-alpine AS base
+FROM node:22-alpine@sha256:1314fb30ec37592d5845e5a160d522c0e680972aa534549940b8d73bde88481a AS base
 # Activate the exact version panel/package.json pins (packageManager: pnpm@11.10.0)
 # rather than trusting corepack's bundled default — a future node:22-alpine that
 # ships a different pnpm would silently change the build's package manager.
