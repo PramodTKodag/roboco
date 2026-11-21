@@ -426,15 +426,13 @@ export function AIRoutingCard() {
       !confirm(
         "Switch every agent to Codex? Per-agent pins and complexity " +
           "overrides are kept; other role/global assignments are replaced. " +
-          "Intake and Secretary chat on Codex too."
+          "Intake and Secretary chat on Codex too.",
       )
     )
       return;
     try {
       await applyMode.mutateAsync({ mode: "codex" });
-      toast.success(
-        "Role/global routing now on Codex, pins/overrides kept",
-      );
+      toast.success("Role/global routing now on Codex, pins/overrides kept");
     } catch (e) {
       toast.error("Switch failed: " + errMsg(e));
     }
@@ -445,15 +443,13 @@ export function AIRoutingCard() {
       !confirm(
         "Switch every agent to Gemini? Per-agent pins and complexity " +
           "overrides are kept; other role/global assignments are replaced. " +
-          "Intake and Secretary chat on Gemini too."
+          "Intake and Secretary chat on Gemini too.",
       )
     )
       return;
     try {
       await applyMode.mutateAsync({ mode: "gemini" });
-      toast.success(
-        "Role/global routing now on Gemini, pins/overrides kept",
-      );
+      toast.success("Role/global routing now on Gemini, pins/overrides kept");
     } catch (e) {
       toast.error("Switch failed: " + errMsg(e));
     }
@@ -464,15 +460,13 @@ export function AIRoutingCard() {
       !confirm(
         "Switch every agent to Kimi? Per-agent pins and complexity " +
           "overrides are kept; other role/global assignments are replaced. " +
-          "Intake and Secretary chat on Kimi too."
+          "Intake and Secretary chat on Kimi too.",
       )
     )
       return;
     try {
       await applyMode.mutateAsync({ mode: "kimi" });
-      toast.success(
-        "Role/global routing now on Kimi, pins/overrides kept",
-      );
+      toast.success("Role/global routing now on Kimi, pins/overrides kept");
     } catch (e) {
       toast.error("Switch failed: " + errMsg(e));
     }
@@ -960,11 +954,10 @@ export function AIRoutingCard() {
         <CardDescription>
           Decide which model backs each agent. Anthropic uses the mounted
           <code className="px-1"> ~/.claude </code> auth; Grok (xAI), Ollama
-          Cloud and Nebius use the API keys you save below; Codex,
-          Gemini, and Kimi authenticate via their own mounted CLI subscriptions
-          (no key needed) — V1: delivery roles only, not Intake/Secretary;
-          Self-Hosted connects to any OpenAI-compatible endpoint you run
-          locally.
+          Cloud and Nebius use the API keys you save below; Codex, Gemini, and
+          Kimi authenticate via their own mounted CLI subscriptions (no key
+          needed) — V1: delivery roles only, not Intake/Secretary; Self-Hosted
+          connects to any OpenAI-compatible endpoint you run locally.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">

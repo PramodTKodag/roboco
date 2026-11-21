@@ -10,8 +10,14 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/hooks/use-tasks", () => ({
   // The attestation download rides the shared hook module; the header tests
   // stub it so no QueryClient is needed (mirrors the other lifecycle hooks).
-  useTaskAttestationDownload: () => ({ mutateAsync: vi.fn().mockResolvedValue(undefined), isPending: false }),
-  useReviewPatchExport: () => ({ mutateAsync: vi.fn().mockResolvedValue(0), isPending: false }),
+  useTaskAttestationDownload: () => ({
+    mutateAsync: vi.fn().mockResolvedValue(undefined),
+    isPending: false,
+  }),
+  useReviewPatchExport: () => ({
+    mutateAsync: vi.fn().mockResolvedValue(0),
+    isPending: false,
+  }),
   useUpdateTask: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useDeleteTask: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useTaskValidTransitions: () => ({ data: [], isLoading: false }),
