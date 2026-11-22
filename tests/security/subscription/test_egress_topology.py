@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 import time
@@ -55,11 +56,24 @@ sys.modules.setdefault("verify_network", verify_network)
 _spec.loader.exec_module(verify_network)
 
 
+# The compose file requires every deployment secret to be set before it will even
+# render. Only the two egress services are started here, so these placeholders are
+# never used by a running container.
+_REQUIRED_COMPOSE_VARIABLES = frozenset(
+    re.findall(r"\$\{(\w+):\?", COMPOSE_FILE.read_text())
+) - {"ROBOCO_EGRESS_POLICY_SHA256"}
+_SYNTHETIC_COMPOSE_VARIABLES = {
+    name: f"synthetic-{name.lower()}" for name in sorted(_REQUIRED_COMPOSE_VARIABLES)
+}
+_EGRESS_SERVICES = ("egress-proxy", "egress-ca-publish")
+
+
 def _compose(
     project: str, *args: str, digest: str | None = None
 ) -> subprocess.CompletedProcess[str]:
     env = {
         **os.environ,
+        **_SYNTHETIC_COMPOSE_VARIABLES,
         "ROBOCO_EGRESS_POLICY_SHA256": digest or DIGEST_FILE.read_text().strip(),
     }
     return subprocess.run(
@@ -73,7 +87,7 @@ def _compose(
 
 
 def _start(project: str) -> None:
-    started = _compose(project, "up", "-d")
+    started = _compose(project, "up", "-d", *_EGRESS_SERVICES)
     assert started.returncode == 0, started.stderr
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
@@ -140,7 +154,7 @@ def test_runtime_and_worker_namespaces_have_no_route_around_the_proxy(
 
 def test_the_stack_refuses_to_start_without_the_reviewed_digest(project: str) -> None:
     # `up` itself reports failure: the publisher waits for a healthy proxy.
-    _compose(project, "up", "-d", digest="0" * 64)
+    _compose(project, "up", "-d", *_EGRESS_SERVICES, digest="0" * 64)
     proxy = f"{project}-egress-proxy-1"
     deadline = time.monotonic() + 30
     logs = ""

@@ -1358,12 +1358,31 @@ async def test_submit_qa_not_self_verified_returns_400(task_client: dict) -> Non
 
 
 @pytest.mark.asyncio
+async def test_submit_qa_local_review_without_artifact_returns_400(
+    task_client: dict,
+) -> None:
+    task = _seed_task(
+        task_client,
+        status=TaskStatus.VERIFYING,
+        assigned_to=task_client["agent"].id,
+        self_verified=True,
+    )
+    await task_client["db"].flush()
+    response = await task_client["client"].post(
+        f"/api/tasks/{task.id}/submit-qa", headers=_HDR
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert "NO_REVIEW_ARTIFACT" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_submit_qa_no_commits_returns_400(task_client: dict) -> None:
     task = _seed_task(
         task_client,
         status=TaskStatus.VERIFYING,
         assigned_to=task_client["agent"].id,
         self_verified=True,
+        review_workflow="forge",
         commits=[],
     )
     await task_client["db"].flush()
@@ -1381,6 +1400,7 @@ async def test_submit_qa_no_pr_returns_400(task_client: dict) -> None:
         status=TaskStatus.VERIFYING,
         assigned_to=task_client["agent"].id,
         self_verified=True,
+        review_workflow="forge",
         commits=[{"hash": "abc", "message": "fix"}],
         pr_number=None,
     )
@@ -1399,6 +1419,7 @@ async def test_submit_qa_no_progress_updates_returns_400(task_client: dict) -> N
         status=TaskStatus.VERIFYING,
         assigned_to=task_client["agent"].id,
         self_verified=True,
+        review_workflow="forge",
         commits=[{"hash": "abc", "message": "fix"}],
         pr_number=42,
         progress_updates=[],
@@ -2264,6 +2285,7 @@ async def test_submit_qa_success(task_client: dict) -> None:
         status=TaskStatus.VERIFYING,
         assigned_to=task_client["agent"].id,
         self_verified=True,
+        review_workflow="forge",
         commits=[
             {
                 "hash": "abc1234",
@@ -2298,6 +2320,7 @@ async def test_submit_qa_service_returns_none_returns_400(
         status=TaskStatus.VERIFYING,
         assigned_to=task_client["agent"].id,
         self_verified=True,
+        review_workflow="forge",
         commits=[{"hash": "abc", "message": "fix"}],
         pr_number=42,
         progress_updates=[

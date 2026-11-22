@@ -265,6 +265,7 @@ async def test_ensure_branch_returns_existing(
 ) -> None:
     svc = task_setup["svc"]
     task = await svc.create(_req(task_setup))
+    task.review_workflow = "forge"
     task.branch_name = "feature/backend/EXISTING"
     out = await svc._ensure_branch_for_task(task, task_setup["agent_id"])
     assert out == "feature/backend/EXISTING"
@@ -1178,6 +1179,7 @@ async def test_ensure_branch_calls_auto_create(
     """Cover line 595: _ensure_branch_for_task → _auto_create_branch."""
     svc = task_setup["svc"]
     task = await svc.create(_req(task_setup))
+    task.review_workflow = "forge"
     # No branch_name set → falls through to auto-create
 
     async def _stub(_t: Any, _a: Any) -> str:

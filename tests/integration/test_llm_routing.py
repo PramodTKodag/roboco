@@ -13,6 +13,7 @@ from roboco.models.llm_catalog import MODEL_CATALOG
 from roboco.services.base import NotFoundError
 from roboco.services.llm import (
     ModelRoutingService,
+    ProviderRoutingError,
     get_model_routing_service,
 )
 from roboco.services.provider import ProviderService, ProviderUpdate
@@ -1254,7 +1255,7 @@ def test_get_model_routing_service_factory(db_session: AsyncSession) -> None:
 async def test_resolve_for_agent_falls_back_on_decrypt_error(
     llm_setup: dict,
 ) -> None:
-    """EncryptionError on decrypt → falls back to legacy path (lines 98-99)."""
+    """An undecryptable token is refused; the agent is never moved to another route."""
 
     svc = llm_setup["svc"]
     await svc.set_ollama_api_key("garbage-token")
@@ -1262,14 +1263,15 @@ async def test_resolve_for_agent_falls_back_on_decrypt_error(
     await svc.upsert_assignment(
         scope=AssignmentScope.GLOBAL, scope_value=None, model_name=ollama_model
     )
-    with patch(
-        "roboco.services.llm.ProviderService.get_decrypted_token",
-        side_effect=EncryptionError("decrypt"),
-        new_callable=AsyncMock,
+    with (
+        patch(
+            "roboco.services.llm.ProviderService.get_decrypted_token",
+            side_effect=EncryptionError("decrypt"),
+            new_callable=AsyncMock,
+        ),
+        pytest.raises(ProviderRoutingError, match="cannot be decrypted"),
     ):
-        route = await svc.resolve_for_agent("be-dev-1")
-    # Falls back to legacy ANTHROPIC route.
-    assert route.provider_type == ModelProvider.ANTHROPIC
+        await svc.resolve_for_agent("be-dev-1")
 
 
 # ---------------------------------------------------------------------------
@@ -1436,7 +1438,7 @@ async def test_resolve_for_agent_self_hosted_returns_base_url(
 async def test_resolve_for_agent_falls_back_when_self_hosted_unreachable(
     llm_setup_with_local: dict,
 ) -> None:
-    """When LOCAL provider is unreachable, falls back to Anthropic default."""
+    """An unreachable self-hosted server is refused, never swapped for another route."""
     svc = llm_setup_with_local["svc"]
     await svc.upsert_assignment(
         scope=AssignmentScope.GLOBAL,
@@ -1444,14 +1446,15 @@ async def test_resolve_for_agent_falls_back_when_self_hosted_unreachable(
         model_name="llama3.1:8b",
         provider_type_override=ModelProvider.LOCAL,
     )
-    with patch(
-        "roboco.services.llm.probe_ollama_tags",
-        new_callable=AsyncMock,
-        return_value=([], "Could not connect to http://localhost:11434"),
+    with (
+        patch(
+            "roboco.services.llm.probe_ollama_tags",
+            new_callable=AsyncMock,
+            return_value=([], "Could not connect to http://localhost:11434"),
+        ),
+        pytest.raises(ProviderRoutingError, match="is unreachable"),
     ):
-        route = await svc.resolve_for_agent("be-dev-1")
-    assert route.provider_type == ModelProvider.ANTHROPIC
-    assert route.base_url is None
+        await svc.resolve_for_agent("be-dev-1")
 
 
 @pytest.mark.asyncio

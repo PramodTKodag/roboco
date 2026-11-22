@@ -1458,6 +1458,7 @@ async def test_escalate_to_ceo_returns_none_when_no_pr(
 ) -> None:
     svc = task_setup["svc"]
     task = await svc.create(_req(task_setup))
+    task.review_workflow = "forge"
     task.status = TaskStatus.AWAITING_PM_REVIEW
     task.pr_number = None
     await db_session.flush()
@@ -2055,6 +2056,7 @@ async def test_submit_for_pm_review_returns_none_when_no_branch(
 ) -> None:
     svc = task_setup["svc"]
     task = await svc.create(_req(task_setup))
+    task.review_workflow = "forge"
     task.status = TaskStatus.IN_PROGRESS
     task.branch_name = None
     await db_session.flush()
@@ -2068,6 +2070,7 @@ async def test_submit_for_pm_review_returns_none_when_no_pr(
 ) -> None:
     svc = task_setup["svc"]
     task = await svc.create(_req(task_setup))
+    task.review_workflow = "forge"
     task.status = TaskStatus.IN_PROGRESS
     task.branch_name = "feature/backend/x"
     task.pr_created = False
