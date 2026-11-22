@@ -232,14 +232,6 @@ class ReviewArtifactService(BaseService):
         await self.session.flush()
         return artifact
 
-    async def reject(self, task: TaskTable) -> ReviewArtifactTable:
-        """Mark the task's open artifact rejected; the work stays in the workspace."""
-        artifact = await self._open_artifact(task)
-        artifact.status = ArtifactStatus.REJECTED.value
-        artifact.decided_at = datetime.now(UTC)
-        await self.session.flush()
-        return artifact
-
     async def _open_artifact(self, task: TaskTable) -> ReviewArtifactTable:
         artifact = await self.current_for(task)
         if artifact is None:

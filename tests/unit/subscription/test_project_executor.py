@@ -12,6 +12,7 @@ from roboco.runtime.subscription.contracts import (
     MAX_COMMAND_BYTES,
     MAX_CONVENTION_FILES,
     WorkerJob,
+    WorkerOperation,
     WorkerResult,
 )
 from roboco.runtime.subscription.project_executor import (
@@ -269,3 +270,43 @@ async def test_conventions_check_stops_at_the_first_batch_that_could_not_run() -
     outcome = await _executor(_Launcher()).check_conventions(files)
     assert outcome.could_not_run is True
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_accept_changes_sends_one_accept_job_for_the_bound_workspace() -> None:
+    launcher = _FakeLauncher()
+    await _executor(launcher).accept_changes()
+    assert [job.operation for job in launcher.jobs] == [WorkerOperation.ACCEPT_CHANGES]
+
+
+@pytest.mark.asyncio
+async def test_accept_changes_failure_is_never_taken_as_accepted() -> None:
+    class _Launcher(_FakeLauncher):
+        async def execute(self, job: WorkerJob) -> WorkerResult:
+            return _result(job.job_id, exit_code=None, reason_code="accept_failed")
+
+    with pytest.raises(ProjectExecutionUnavailable) as excinfo:
+        await _executor(_Launcher()).accept_changes()
+    assert "accept_failed" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_accept_changes_nonzero_exit_is_a_failure() -> None:
+    class _Launcher(_FakeLauncher):
+        async def execute(self, job: WorkerJob) -> WorkerResult:
+            return _result(job.job_id, exit_code=1)
+
+    with pytest.raises(ProjectExecutionUnavailable) as excinfo:
+        await _executor(_Launcher()).accept_changes()
+    assert "accept_changes_failed" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_accept_changes_answer_for_another_job_is_rejected() -> None:
+    class _Launcher(_FakeLauncher):
+        async def execute(self, job: WorkerJob) -> WorkerResult:
+            del job
+            return _result(uuid4(), exit_code=0)
+
+    with pytest.raises(ProjectExecutionUnavailable):
+        await _executor(_Launcher()).accept_changes()

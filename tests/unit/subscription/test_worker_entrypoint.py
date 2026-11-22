@@ -134,6 +134,27 @@ async def test_export_patch_runs_against_the_local_baseline(tmp_path: Path) -> N
     assert result.reason_code is None
 
 
+async def test_accept_changes_advances_the_baseline_for_the_next_export(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "a.txt").write_text("one\n")
+    init_baseline(tmp_path)
+    (tmp_path / "a.txt").write_text("two\n")
+    accepted = await execute_job(_file_job("accept_changes"), tmp_path, 10)
+    assert accepted.exit_code == 0
+    assert accepted.reason_code is None
+    exported = await execute_job(_file_job("export_patch"), tmp_path, 10)
+    assert exported.stdout == ""
+
+
+async def test_accept_changes_without_a_repository_reports_a_reason(
+    tmp_path: Path,
+) -> None:
+    result = await execute_job(_file_job("accept_changes"), tmp_path, 10)
+    assert result.reason_code == "accept_failed"
+    assert result.exit_code is None
+
+
 async def test_stdio_round_trip_returns_one_result_line(tmp_path: Path) -> None:
     job = _command_job("echo hi")
     stdin = io.StringIO(job.model_dump_json() + "\n")

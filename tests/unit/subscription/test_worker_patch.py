@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 from roboco.runtime.subscription.worker_files import WorkspaceFileError
 from roboco.runtime.subscription.worker_patch import (
+    accept_changes,
     apply_patch,
     export_patch,
     init_baseline,
@@ -208,3 +209,47 @@ def test_export_marks_truncation_when_the_diff_is_large(workspace: Path) -> None
     (workspace / "big.txt").write_text("line\n" * 40000)
     out = export_patch(workspace)
     assert out.truncated is True
+
+
+def _commit_count(root: Path) -> int:
+    counted = subprocess.run(
+        ["git", "rev-list", "--count", "HEAD"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return int(counted.stdout)
+
+
+def test_accepting_changes_makes_them_the_new_baseline(workspace: Path) -> None:
+    apply_patch(workspace, GOOD_PATCH)
+    assert export_patch(workspace).text != ""
+    assert accept_changes(workspace).text == "accepted"
+    assert export_patch(workspace).text == ""
+    assert (workspace / "a.txt").read_text() == "one\nTWO\nthree\n"
+    assert _commit_count(workspace) == 2  # noqa: PLR2004 - baseline plus accepted
+
+
+def test_the_next_export_after_an_accept_holds_only_later_changes(
+    workspace: Path,
+) -> None:
+    apply_patch(workspace, GOOD_PATCH)
+    accept_changes(workspace)
+    (workspace / "keep.py").write_text("x = 2\n")
+    exported = export_patch(workspace).text
+    assert "+x = 2" in exported
+    assert "TWO" not in exported
+
+
+def test_accepting_an_unchanged_workspace_still_succeeds(workspace: Path) -> None:
+    assert accept_changes(workspace).text == "accepted"
+    assert export_patch(workspace).text == ""
+
+
+def test_accept_fails_with_a_reason_when_there_is_no_repository(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(WorkspaceFileError) as excinfo:
+        accept_changes(tmp_path)
+    assert _reason(excinfo) == "accept_failed"
