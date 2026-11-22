@@ -1113,7 +1113,25 @@ async def test_start_task_not_assigned_returns_403(task_client: dict) -> None:
 
 @pytest.mark.asyncio
 async def test_start_task_no_branch_returns_400(task_client: dict) -> None:
-    """Task without branch — 400."""
+    """Forge task without branch — 400 (local review has no branch by design)."""
+    client = task_client["client"]
+    task = _seed_task(
+        task_client,
+        status=TaskStatus.CLAIMED,
+        assigned_to=task_client["agent"].id,
+        review_workflow="forge",
+    )
+    await task_client["db"].flush()
+    response = await client.post(f"/api/tasks/{task.id}/start", headers=_HDR)
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert "NO_BRANCH" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_start_local_review_task_needs_no_branch_but_still_needs_a_plan(
+    task_client: dict,
+) -> None:
+    """A local review task is branchless by design; the plan gate still applies."""
     client = task_client["client"]
     task = _seed_task(
         task_client,
@@ -1123,7 +1141,8 @@ async def test_start_task_no_branch_returns_400(task_client: dict) -> None:
     await task_client["db"].flush()
     response = await client.post(f"/api/tasks/{task.id}/start", headers=_HDR)
     assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert "NO_BRANCH" in response.json()["detail"]
+    assert "NO_PLAN" in response.json()["detail"]
+    assert "NO_BRANCH" not in response.json()["detail"]
 
 
 @pytest.mark.asyncio
