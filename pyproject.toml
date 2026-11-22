@@ -576,6 +576,10 @@ extend_exclude = ["conftest.py", "setup.py"]
 known_first_party = ["roboco"]
 
 [tool.deptry.per_rule_ignores]
+# DEP001: modules imported by the personal deployment tooling that are not project
+# dependencies. The proxy add-on runs inside the pinned proxy image (which ships
+# mitmproxy) next to its policy module; the owner scripts import their siblings.
+DEP001 = ["mitmproxy", "egress_policy", "probe_cli_contract", "stack"]
 # DEP002: Dependencies not directly imported but used at runtime or via CLI
 DEP002 = [
     # Runtime server/driver dependencies (used by frameworks, not imported)
