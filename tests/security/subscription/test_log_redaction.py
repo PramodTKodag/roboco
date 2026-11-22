@@ -98,10 +98,15 @@ def test_counters_named_like_tokens_are_kept() -> None:
 def request_log(request: pytest.FixtureRequest) -> Iterator[TestClient]:
     # Capture must be live before logging is configured so its handlers bind to it.
     request.getfixturevalue("capfd")
+    # Restore the exact configuration objects afterwards: loggers bound earlier in
+    # the run hold the original processor list, and a fresh list (reset_defaults)
+    # would hide them from every later capture_logs() test.
+    previous_config = structlog.get_config()
+    previous_handlers = list(logging.getLogger().handlers)
     setup_logging()
     # setup_logging() caches each logger on first use. A cached module logger would
-    # keep these real processors for the rest of the run and hide later
-    # capture_logs() tests, so the fixture must not leave any behind.
+    # keep these real processors for the rest of the run, so the fixture must not
+    # leave any behind.
     structlog.configure(cache_logger_on_first_use=False)
     # The test client's own transport logs the full URL; only the server's logs
     # are under test.
@@ -115,8 +120,8 @@ def request_log(request: pytest.FixtureRequest) -> Iterator[TestClient]:
         return {"ok": "yes"}
 
     yield TestClient(app)
-    structlog.reset_defaults()
-    logging.getLogger().handlers.clear()
+    structlog.configure(**previous_config)
+    logging.getLogger().handlers[:] = previous_handlers
 
 
 def test_request_logging_never_prints_credentials_from_the_query_string(
