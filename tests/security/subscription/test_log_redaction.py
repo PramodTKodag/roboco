@@ -99,6 +99,10 @@ def request_log(request: pytest.FixtureRequest) -> Iterator[TestClient]:
     # Capture must be live before logging is configured so its handlers bind to it.
     request.getfixturevalue("capfd")
     setup_logging()
+    # setup_logging() caches each logger on first use. A cached module logger would
+    # keep these real processors for the rest of the run and hide later
+    # capture_logs() tests, so the fixture must not leave any behind.
+    structlog.configure(cache_logger_on_first_use=False)
     # The test client's own transport logs the full URL; only the server's logs
     # are under test.
     for client_logger in ("httpx", "httpx2", "httpcore"):
