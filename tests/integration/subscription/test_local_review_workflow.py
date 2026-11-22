@@ -10,8 +10,8 @@ the container suites).
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, cast
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -31,12 +31,7 @@ from roboco.models.base import (
     TaskType,
     Team,
 )
-from roboco.runtime.subscription.project_executor import (
-    PatchOutcome,
-    ProjectExecutionUnavailable,
-)
 from roboco.services.gateway.choreographer import Choreographer, ChoreographerDeps
-from roboco.services.gateway.quality_gate import GateResult
 from roboco.services.review_artifact import (
     ReviewArtifactRefused,
     ReviewArtifactService,
@@ -44,6 +39,13 @@ from roboco.services.review_artifact import (
 from roboco.services.task import TaskService
 
 from tests.integration.conftest import cleanup_project_durable_rows
+from tests.integration.local_review_support import (
+    SYNTHETIC_PATCH,
+    FakeExecutors,
+    FakeWorkspace,
+    StrictGit,
+    patch_for,
+)
 from tests.integration.test_full_lifecycle_real_db import (
     _GOOD_PLAN,
     _GOOD_RISKS,
@@ -52,80 +54,15 @@ from tests.integration.test_full_lifecycle_real_db import (
     _mock_evidence_repo,
     _mock_journal_with_reflect,
     _mock_work_session,
-    _seed_main_pm,
-    _seed_root_task,
+)
+from tests.integration.test_full_lifecycle_real_db import (
+    _seed_cell_and_root as seed_cell_and_root,
 )
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from sqlalchemy.ext.asyncio import AsyncSession
-
-SYNTHETIC_PATCH = (
-    "diff --git a/app/health.py b/app/health.py\n"
-    "new file mode 100644\n"
-    "index 0000000..1111111\n"
-    "--- /dev/null\n"
-    "+++ b/app/health.py\n"
-    "@@ -0,0 +1,2 @@\n"
-    "+def healthz() -> dict[str, str]:\n"
-    '+    return {"status": "ok"}\n'
-)
-
-
-class ForgeTouched(AssertionError):
-    """The workflow reached a forge or host-clone operation."""
-
-
-class StrictGit:
-    """Only the worker-backed quality gate is reachable; anything else fails."""
-
-    def __init__(self) -> None:
-        self.quality_gate_runs = 0
-        self.quality_gate_passes = True
-
-    async def run_pre_submit_quality_gate(self, task: Any) -> GateResult:
-        del task
-        self.quality_gate_runs += 1
-        return GateResult(passed=self.quality_gate_passes, skipped=False)
-
-    def __getattr__(self, name: str) -> Any:
-        raise ForgeTouched(f"git.{name} was called in the local review workflow")
-
-
-@dataclass
-class FakeWorkspace:
-    """The offline worker as the controller sees it."""
-
-    patch: str = SYNTHETIC_PATCH
-    truncated: bool = False
-    accepted: int = 0
-    unavailable: bool = False
-    exports: int = field(default=0)
-
-    async def export_patch(self) -> PatchOutcome:
-        if self.unavailable:
-            raise ProjectExecutionUnavailable("worker_not_configured")
-        self.exports += 1
-        return PatchOutcome(patch=self.patch, truncated=self.truncated)
-
-    async def accept_changes(self) -> None:
-        self.accepted += 1
-
-    async def run_command(self, command: str) -> Any:
-        raise AssertionError(f"unexpected command {command}")
-
-    async def check_conventions(self, files: list[str]) -> Any:
-        raise AssertionError(f"unexpected conventions run for {files}")
-
-
-class FakeExecutors:
-    def __init__(self, workspace: FakeWorkspace) -> None:
-        self.workspace = workspace
-
-    async def executor_for(self, project_id: UUID, task_id: UUID) -> FakeWorkspace:
-        del project_id, task_id
-        return self.workspace
 
 
 def _id(row: TaskTable) -> UUID:
@@ -371,18 +308,6 @@ async def test_task_reaches_owner_review_without_touching_a_forge(
     assert exported.paths == ("app/health.py",)
 
 
-def _patch_for(path: str, line: str) -> str:
-    return (
-        f"diff --git a/{path} b/{path}\n"
-        "new file mode 100644\n"
-        "index 0000000..1111111\n"
-        "--- /dev/null\n"
-        f"+++ b/{path}\n"
-        "@@ -0,0 +1 @@\n"
-        f"+{line}\n"
-    )
-
-
 async def _task_row(h: LocalReviewHarness) -> TaskTable:
     task = await h.task_service.get(h.task_id)
     assert task is not None
@@ -392,9 +317,9 @@ async def _task_row(h: LocalReviewHarness) -> TaskTable:
 @pytest.mark.parametrize(
     ("patch", "reason"),
     [
-        (_patch_for("config/.env", "MODE=dev"), "patch_path_denied"),
+        (patch_for("config/.env", "MODE=dev"), "patch_path_denied"),
         (
-            _patch_for("app/keys.py", "-----BEGIN PRIVATE KEY-----"),
+            patch_for("app/keys.py", "-----BEGIN PRIVATE KEY-----"),
             "secrets_suspected",
         ),
         ("", "patch_empty"),
@@ -494,7 +419,7 @@ async def test_qa_failure_then_new_work_supersedes_the_artifact(
     assert env.error is None, env.message
     assert (await _task_row(h)).status == TaskStatus.NEEDS_REVISION
 
-    h.workspace.patch = _patch_for("app/health.py", "def healthz() -> Health: ...")
+    h.workspace.patch = patch_for("app/health.py", "def healthz() -> Health: ...")
     env = await h.c.i_will_work_on(
         agent_id=h.dev_id,
         task_id=h.task_id,
@@ -520,7 +445,7 @@ async def test_documentation_cannot_alter_the_reviewed_change(
     await _submit_to_qa(h)
     await _qa_pass(h)
     assert (await h.c.claim_doc_task(h.doc_id, h.task_id)).error is None
-    h.workspace.patch = _patch_for("app/health.py", "return tampered")
+    h.workspace.patch = patch_for("app/health.py", "return tampered")
 
     env = await h.c.i_documented(
         h.doc_id,
@@ -536,35 +461,7 @@ async def test_documentation_cannot_alter_the_reviewed_change(
 
 async def _seed_cell_and_root(h: LocalReviewHarness) -> tuple[TaskTable, TaskTable]:
     """Parent the harness task under a cell task under a Main-PM root."""
-    session = h.task_service.session
-    main_pm_id = await _seed_main_pm(session)
-    root = await _seed_root_task(
-        session,
-        project_id=cast("UUID", h.task.project_id),
-        creator_id=cast("UUID", h.task.created_by),
-        main_pm_id=main_pm_id,
-    )
-    root.branch_name = None
-    cell = TaskTable(
-        id=uuid4(),
-        title="Backend cell: healthz",
-        description="Cell scope assembling the /healthz work",
-        status=TaskStatus.IN_PROGRESS,
-        priority=2,
-        task_type=TaskType.PLANNING,
-        nature=TaskNature.TECHNICAL,
-        team=Team.BACKEND,
-        project_id=cast("UUID", h.task.project_id),
-        created_by=h.task.created_by,
-        assigned_to=h.cell_pm_id,
-        parent_task_id=_id(root),
-        acceptance_criteria=["The /healthz endpoint ships"],
-    )
-    session.add(cell)
-    await session.flush()
-    h.task.parent_task_id = cell.id
-    await session.flush()
-    return cell, root
+    return await seed_cell_and_root(h.task_service.session, h.task, h.cell_pm_id)
 
 
 async def test_cell_and_root_reach_owner_approval_without_a_pull_request(

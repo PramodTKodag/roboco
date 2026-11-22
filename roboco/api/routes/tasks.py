@@ -1128,7 +1128,7 @@ async def start_task(
     # plan. The service checks plan internally but returns a generic None
     # on failure; surface the specific cause here so the agent knows
     # what to call next.
-    if not task.branch_name:
+    if not task.branch_name and not is_local_review(task):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(

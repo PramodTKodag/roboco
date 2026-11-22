@@ -56,7 +56,10 @@ from roboco.foundation.policy.lane import transitive_dependents
 from roboco.foundation.policy.lifecycle import (
     _ORG_WIDE_ROLES as _SPEC_ORG_WIDE_ROLES,
 )
-from roboco.foundation.policy.review_workflow import is_local_review
+from roboco.foundation.policy.review_workflow import (
+    can_resume_in_progress,
+    is_local_review,
+)
 from roboco.models.base import (
     AgentRole,
     AgentStatus,
@@ -6736,7 +6739,11 @@ class TaskService(BaseService):
         # resume in_progress (the dispatcher refuses a branchless in_progress
         # task and loops), so return it to pending to be freshly claimed — the
         # claim gate then holds it cleanly if its dependency is still unmet.
-        target = TaskStatus.IN_PROGRESS if task.branch_name else TaskStatus.PENDING
+        target = (
+            TaskStatus.IN_PROGRESS
+            if can_resume_in_progress(task)
+            else TaskStatus.PENDING
+        )
         self._validate_and_set_status(task, target, agent_role)
         owner_id = to_python_uuid(owner)
         if target == TaskStatus.IN_PROGRESS and owner_id is not None:
@@ -13201,11 +13208,13 @@ class TaskService(BaseService):
         """Apply the snapshotted status/owner restore; return (pre_status,
         diverted_restored_status, restored_owner).
 
-        A branchless in_progress diverts to pending (the dispatcher refuses a
-        branchless in_progress task and loops). Re-owns from the snapshot and
-        clears the pre-block snapshot fields.
+        A branchless forge in_progress (or a local review one with no plan) diverts
+        to pending (the dispatcher refuses such a task and loops). Re-owns from
+        the snapshot and clears the pre-block snapshot fields.
         """
-        if restored_status == TaskStatus.IN_PROGRESS and not task.branch_name:
+        if restored_status == TaskStatus.IN_PROGRESS and not can_resume_in_progress(
+            task
+        ):
             restored_status = TaskStatus.PENDING
         pre_status = (
             task.status.value

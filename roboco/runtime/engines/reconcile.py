@@ -326,10 +326,11 @@ class ReconcileEngine(_Base):
         Same shape as ``_reap_with_service`` — extracted so tests can
         bypass ``get_session_factory`` and drive the logic directly.
         """
+        from roboco.foundation.policy.review_workflow import can_resume_in_progress
         from roboco.utils.converters import require_uuid
 
         candidates = await svc.list_in_progress_or_claimed()
-        orphans = [t for t in candidates if not t.branch_name]
+        orphans = [t for t in candidates if not can_resume_in_progress(t)]
         if not orphans:
             logger.info("startup reconcile: no orphan claims")
             return

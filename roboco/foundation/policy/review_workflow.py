@@ -52,6 +52,18 @@ def forbids_forge_actions(task: object) -> bool:
     }
 
 
+def can_resume_in_progress(task: object) -> bool:
+    """True when the task has started work and may resume ``in_progress``.
+
+    A forge task has started once its branch is cut. A local review task is
+    branchless by design, so it has started once it carries the plan set at claim.
+    A task blocked before it was ever claimed has neither and returns to the pool.
+    """
+    if getattr(task, "branch_name", None):
+        return True
+    return is_local_review(task) and bool(getattr(task, "plan", None))
+
+
 def artifact_label(artifact_id: object, digest: str) -> str:
     """Short, stable label an agent or owner can quote: ``<id8>@<sha8>``."""
     return f"{str(artifact_id)[:ARTIFACT_ID_PREFIX_LENGTH]}@{digest[:8]}"

@@ -45,6 +45,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tests.integration.conftest import cleanup_claim_durable_rows
+from tests.integration.local_review_support import LocalReviewKit
 
 # A developer fresh claim must carry a substantive step checklist.
 _STEPS = [
@@ -281,6 +282,27 @@ def _build_choreographer(
     return Choreographer(deps)
 
 
+def _build_local_review_choreographer(
+    task_service: TaskService, kit: LocalReviewKit, *, a2a: Any = None
+) -> Choreographer:
+    """A real Choreographer over local review: artifacts real, forge forbidden.
+
+    ``kit.git`` fails the test on any forge or host-clone call, so a lifecycle
+    path that regressed into a pull request or merge cannot pass silently.
+    """
+    deps = ChoreographerDeps(
+        task=task_service,
+        work_session=_mock_work_session(),
+        git=kit.git,
+        a2a=a2a if a2a is not None else AsyncMock(),
+        journal=_mock_journal_with_reflect(),
+        audit=AsyncMock(),
+        evidence_repo=_mock_evidence_repo(),
+        review_artifacts=kit.artifacts,
+    )
+    return Choreographer(deps)
+
+
 async def _seed_agents_and_project(
     db_session: AsyncSession,
 ) -> dict[str, Any]:
@@ -436,6 +458,7 @@ async def lifecycle_setup(
     db_session.add(task)
     await db_session.flush()
     seeded["task"] = task
+    seeded["kit"] = LocalReviewKit.create(db_session)
     ids = {
         "task_id": task.id,
         "project_id": seeded["project"].id,
@@ -475,24 +498,18 @@ async def test_dev_full_chain_through_awaiting_qa(
 ) -> None:
     """pending → claimed → in_progress → verifying → awaiting_qa.
 
-    Drives ``i_will_work_on`` (claim+plan+start), a stubbed commit,
-    ``open_pr``, then ``i_am_done`` which auto-runs submit_verification
-    + submit_qa. Asserts the final DB row sits at ``awaiting_qa``.
+    Drives ``i_will_work_on`` (claim+plan+start), ``open_pr`` (captures the
+    local review artifact), then ``i_am_done`` which auto-runs
+    submit_verification + submit_qa. Asserts the final DB row sits at
+    ``awaiting_qa`` holding an open artifact and no pull request.
     """
     task = lifecycle_setup["task"]
     dev_agent = lifecycle_setup["dev_agent"]
+    kit: LocalReviewKit = lifecycle_setup["kit"]
+    task.branch_name = None  # a local review task owns no branch
+    await db_session.flush()
     task_service = TaskService(db_session)
-    stub_git = _StubGit(db_session, task)
-    deps = ChoreographerDeps(
-        task=task_service,
-        work_session=_mock_work_session(),
-        git=stub_git,
-        a2a=AsyncMock(),
-        journal=_mock_journal_with_reflect(),
-        audit=AsyncMock(),
-        evidence_repo=_mock_evidence_repo(),
-    )
-    c = Choreographer(deps)
+    c = _build_local_review_choreographer(task_service, kit)
 
     env = await c.i_will_work_on(
         agent_id=dev_agent.id,
@@ -505,12 +522,6 @@ async def test_dev_full_chain_through_awaiting_qa(
     assert env.error is None, f"i_will_work_on failed: {env.message}"
     assert env.status == Status.IN_PROGRESS.value
 
-    # Commit + record progress so open_pr's commits-precondition holds.
-    await stub_git.commit(
-        branch_name=_BRANCH,
-        message=f"[{str(task.id)[:8]}] feat(api): add /healthz",
-        task_id=task.id,
-    )
     await task_service.add_progress(task.id, dev_agent.id, "implemented /healthz")
 
     env = await c.open_pr(dev_agent.id, task.id)
@@ -532,6 +543,10 @@ async def test_dev_full_chain_through_awaiting_qa(
     final = await task_service.get(task.id)
     assert final is not None
     assert str(final.status) == Status.AWAITING_QA.value
+    assert final.pr_number is None, "local review opens no pull request"
+    artifact = await kit.artifacts.current_for(final)
+    assert artifact is not None, "open_pr must capture the review artifact"
+    assert artifact.status == "open"
     # i_am_done auto-runs submit_qa, which hands the task off to the
     # backend QA agent (production behaviour — see ``_notify_qa``).
     # Resolve via the same lookup the choreographer uses so the
@@ -685,19 +700,16 @@ async def test_doc_path(
     doc_agent = lifecycle_setup["doc_agent"]
     cell_pm_agent = lifecycle_setup["cell_pm_agent"]
 
+    kit: LocalReviewKit = lifecycle_setup["kit"]
+    await kit.capture_open_artifact(task, agent_id=lifecycle_setup["dev_agent"].id)
+    task.branch_name = None  # a local review task owns no branch
     task.status = TaskStatus.AWAITING_DOCUMENTATION
-    task.pr_number = _PR_NUMBER
-    task.pr_url = _PR_URL
-    task.pr_created = True
     task.qa_verified = True
     task.assigned_to = None  # documenter must claim from unassigned.
-    task.commits = [
-        {"sha": uuid4().hex[:40], "message": "feat: /healthz", "task_id": str(task.id)}
-    ]
     await db_session.flush()
 
     task_service = TaskService(db_session)
-    c = _build_choreographer(db_session, task, task_service)
+    c = _build_local_review_choreographer(task_service, kit)
 
     env = await c.claim_doc_task(doc_agent.id, task.id)
     assert env.error is None, f"claim_doc_task failed: {env.message}"
@@ -725,6 +737,9 @@ async def test_doc_path(
     assert resolved_pm is not None
     assert final.assigned_to == resolved_pm.id
     del cell_pm_agent  # asserted indirectly via cell_pm_for_team.
+    artifact = await kit.artifacts.current_for(final)
+    assert artifact is not None
+    assert artifact.status == "open", "documentation keeps the reviewed artifact"
 
 
 @pytest.mark.asyncio
@@ -745,15 +760,12 @@ async def test_doc_path_survives_handoff_failure_real_session(
     task = lifecycle_setup["task"]
     doc_agent = lifecycle_setup["doc_agent"]
 
+    kit: LocalReviewKit = lifecycle_setup["kit"]
+    await kit.capture_open_artifact(task, agent_id=lifecycle_setup["dev_agent"].id)
+    task.branch_name = None  # a local review task owns no branch
     task.status = TaskStatus.AWAITING_DOCUMENTATION
-    task.pr_number = _PR_NUMBER
-    task.pr_url = _PR_URL
-    task.pr_created = True
     task.qa_verified = True
     task.assigned_to = None
-    task.commits = [
-        {"sha": uuid4().hex[:40], "message": "feat: /healthz", "task_id": str(task.id)}
-    ]
     await db_session.flush()
 
     task_service = TaskService(db_session)
@@ -761,16 +773,7 @@ async def test_doc_path_survives_handoff_failure_real_session(
     # — this raises only after that mutation has already flushed.
     broken_a2a = AsyncMock()
     broken_a2a.send.side_effect = RuntimeError("a2a down")
-    deps = ChoreographerDeps(
-        task=task_service,
-        work_session=_mock_work_session(),
-        git=_StubGit(db_session, task),
-        a2a=broken_a2a,
-        journal=_mock_journal_with_reflect(),
-        audit=AsyncMock(),
-        evidence_repo=_mock_evidence_repo(),
-    )
-    c = Choreographer(deps)
+    c = _build_local_review_choreographer(task_service, kit, a2a=broken_a2a)
 
     env = await c.claim_doc_task(doc_agent.id, task.id)
     assert env.error is None, f"claim_doc_task failed: {env.message}"
@@ -874,31 +877,27 @@ async def test_pm_complete_simple_task(
 ) -> None:
     """awaiting_pm_review → cell_pm complete → completed.
 
-    A cell PM completing a non-root awaiting_pm_review task transitions
-    straight to COMPLETED — there is no cell→main escalation in
-    ``complete`` (the cell→main hand-off, when intended, uses
-    ``submit_up``).
+    A cell PM completing a non-root awaiting_pm_review task accepts its local
+    review artifact and transitions straight to COMPLETED — there is no
+    cell→main escalation in ``complete`` (the cell→main hand-off, when
+    intended, uses ``submit_up``).
     """
     task = lifecycle_setup["task"]
     cell_pm_agent = lifecycle_setup["cell_pm_agent"]
 
+    kit: LocalReviewKit = lifecycle_setup["kit"]
+    await kit.capture_open_artifact(task, agent_id=lifecycle_setup["dev_agent"].id)
     task.status = TaskStatus.AWAITING_PM_REVIEW
-    task.pr_number = _PR_NUMBER
-    task.pr_url = _PR_URL
-    task.pr_created = True
     task.qa_verified = True
     task.docs_complete = True
     task.assigned_to = cell_pm_agent.id
-    task.commits = [
-        {"sha": uuid4().hex[:40], "message": "feat: /healthz", "task_id": str(task.id)}
-    ]
     await db_session.flush()
 
     task_service = TaskService(db_session)
-    c = _build_choreographer(db_session, task, task_service)
+    c = _build_local_review_choreographer(task_service, kit)
 
     env = await c.complete(
-        cell_pm_agent.id, task.id, notes="LGTM — merging the leaf PR."
+        cell_pm_agent.id, task.id, notes="LGTM — accepting the leaf's local patch."
     )
     assert env.error is None, f"complete failed: {env.message}"
     assert env.status == Status.COMPLETED.value
@@ -906,28 +905,31 @@ async def test_pm_complete_simple_task(
     final = await task_service.get(task.id)
     assert final is not None
     assert str(final.status) == Status.COMPLETED.value
+    artifact = await kit.artifacts.current_for(final)
+    assert artifact is not None
+    assert artifact.status == "accepted", "completing accepts the reviewed artifact"
+    assert kit.workspace.accepted == 1, "acceptance advances the workspace baseline"
 
 
 @pytest.mark.asyncio
-async def test_cell_pm_complete_routes_ceo_only_head_branch_to_ceo(
+async def test_cell_pm_complete_under_branchless_root_needs_no_ceo_merge(
     db_session: AsyncSession, lifecycle_setup: dict[str, Any]
 ) -> None:
     """awaiting_pm_review leaf whose parent is a branchless coordination root
-    resolves its merge target to the project head env branch ('main'). pr_merge
-    is CEO-only there, so cell_pm_complete must catch the CEO_ONLY refusal and
-    route the leaf to awaiting_ceo_approval via the REAL TaskService (not a
-    mocked escalate_to_ceo), exercising the cell_pm role-bypass on the
-    awaiting_pm_review -> awaiting_ceo_approval transition. This is the exact
-    gap PR 883 left: its unit test mocked escalate_to_ceo, so the role gate
-    (cell_pm not in the spec-pinned allowed roles) was never exercised and the
-    integration suite caught it only on CI. Live: 5612b225/PR 856, 5b780794.
+    completes in the cell PM's own hands: local review has no merge target, so
+    the project head environment branch (merge-reserved for the CEO under the
+    forge workflow) never enters the picture. ``complete`` accepts the leaf's
+    artifact through the REAL TaskService and lands on ``completed`` instead of
+    ``awaiting_ceo_approval``; the strict git double fails the test if any
+    ``pr_merge`` / forge call is attempted.
     """
     cell_pm_agent = lifecycle_setup["cell_pm_agent"]
+    dev_agent = lifecycle_setup["dev_agent"]
     project = lifecycle_setup["project"]
     system_agent = lifecycle_setup["system_agent"]
+    kit: LocalReviewKit = lifecycle_setup["kit"]
 
-    # A branchless coordination-root parent: no branch of its own, so
-    # resolve_parent_branch falls back to the project head branch ('main').
+    # A branchless coordination-root parent: no branch of its own.
     parent = TaskTable(
         id=uuid4(),
         title="Coordinate the cell",
@@ -959,13 +961,8 @@ async def test_cell_pm_complete_routes_ceo_only_head_branch_to_ceo(
         created_by=system_agent.id,
         assigned_to=cell_pm_agent.id,
         parent_task_id=parent.id,
-        branch_name=_BRANCH,
-        pr_number=_PR_NUMBER,
-        pr_url=_PR_URL,
-        pr_created=True,
         qa_verified=True,
         docs_complete=True,
-        commits=[{"sha": uuid4().hex[:40], "message": "feat: /healthz", "task_id": ""}],
         acceptance_criteria=["Returns 200", "Includes timestamp"],
         acceptance_criteria_status=[
             {"criterion": "Returns 200", "referencing_artifact_id": "stub"},
@@ -974,32 +971,25 @@ async def test_cell_pm_complete_routes_ceo_only_head_branch_to_ceo(
     )
     db_session.add(leaf)
     await db_session.flush()
+    await kit.capture_open_artifact(leaf, agent_id=dev_agent.id)
 
     task_service = TaskService(db_session)
-    # ceo_only_branch='main' makes the stub's pr_merge raise CEO_ONLY for the
-    # head branch, exactly as the production guard does (git.py pr_merge).
-    deps = ChoreographerDeps(
-        task=task_service,
-        work_session=_mock_work_session(),
-        git=_StubGit(db_session, leaf, ceo_only_branch="main"),
-        a2a=AsyncMock(),
-        journal=_mock_journal_with_reflect(),
-        audit=AsyncMock(),
-        evidence_repo=_mock_evidence_repo(),
-    )
-    c = Choreographer(deps)
+    c = _build_local_review_choreographer(task_service, kit)
 
     env = await c.cell_pm_complete(
         cell_pm_agent.id,
         UUID(str(leaf.id)),
-        notes="LGTM - routing to CEO for the head-branch merge.",
+        notes="LGTM - accepting the leaf's local patch.",
     )
     assert env.error is None, f"complete failed: {env.message}"
-    assert env.status == Status.AWAITING_CEO_APPROVAL.value
+    assert env.status == Status.COMPLETED.value
 
     final = await task_service.get(UUID(str(leaf.id)))
     assert final is not None
-    assert str(final.status) == Status.AWAITING_CEO_APPROVAL.value
+    assert str(final.status) == Status.COMPLETED.value
+    artifact = await kit.artifacts.current_for(final)
+    assert artifact is not None
+    assert artifact.status == "accepted"
 
 
 async def _seed_reviewer(db_session: AsyncSession) -> AgentTable:

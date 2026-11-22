@@ -41,6 +41,7 @@ from roboco.services.task import TaskService
 from sqlalchemy import select
 
 from tests.integration.conftest import cleanup_claim_durable_rows
+from tests.integration.local_review_support import LocalReviewKit, patch_for
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -373,6 +374,7 @@ async def setup(
     db_session.add(task)
     await db_session.flush()
     seeded["task"] = task
+    seeded["kit"] = LocalReviewKit.create(db_session)
     ids = {
         "task_id": task.id,
         "project_id": seeded["project"].id,
@@ -406,6 +408,23 @@ def _choreographer(db_session: AsyncSession, task: TaskTable) -> Choreographer:
         journal=_mock_journal_with_reflect(),
         audit=AsyncMock(),
         evidence_repo=_mock_evidence_repo(),
+    )
+    return Choreographer(deps)
+
+
+def _local_review_choreographer(
+    db_session: AsyncSession, kit: LocalReviewKit
+) -> Choreographer:
+    """A real Choreographer over local review: artifacts real, forge forbidden."""
+    deps = ChoreographerDeps(
+        task=TaskService(db_session),
+        work_session=_mock_work_session(),
+        git=kit.git,
+        a2a=AsyncMock(),
+        journal=_mock_journal_with_reflect(),
+        audit=AsyncMock(),
+        evidence_repo=_mock_evidence_repo(),
+        review_artifacts=kit.artifacts,
     )
     return Choreographer(deps)
 
@@ -758,19 +777,11 @@ async def test_i_am_done_full_chain_blocks_then_resolves(
     task = setup["task"]
     dev_agent = setup["dev_agent"]
     qa_agent = setup["qa_agent"]
+    kit: LocalReviewKit = setup["kit"]
+    task.branch_name = None  # a local review task owns no branch
+    await db_session.flush()
     task_service = TaskService(db_session)
-    stub_git = _StubGit(db_session, task)
-    c = Choreographer(
-        ChoreographerDeps(
-            task=task_service,
-            work_session=_mock_work_session(),
-            git=stub_git,
-            a2a=AsyncMock(),
-            journal=_mock_journal_with_reflect(),
-            audit=AsyncMock(),
-            evidence_repo=_mock_evidence_repo(),
-        )
-    )
+    c = _local_review_choreographer(db_session, kit)
 
     # --- Round 1: no findings exist yet — i_am_done must pass untouched. ---
     env = await c.i_will_work_on(
@@ -783,12 +794,13 @@ async def test_i_am_done_full_chain_blocks_then_resolves(
     )
     assert env.error is None, env.as_dict()
 
-    await stub_git.commit(
-        branch_name=_BRANCH, message="feat(api): add /healthz", task_id=task.id
-    )
     await task_service.add_progress(task.id, dev_agent.id, "implemented /healthz")
     env = await c.open_pr(dev_agent.id, task.id)
     assert env.error is None, env.as_dict()
+    captured = await task_service.get(task.id)
+    assert captured is not None
+    first_artifact_id = captured.review_artifact_id
+    assert first_artifact_id is not None, "open_pr must capture the review artifact"
     await task_service.record_section_note(
         task.id,
         "developer",
@@ -853,7 +865,9 @@ async def test_i_am_done_full_chain_blocks_then_resolves(
         assert f"finding:{fid}" in body["missing"], body["missing"]
     assert all(fid in body["remediate"] for fid in open_ids)
 
-    # --- i_am_done WITH resolved_findings for both now succeeds. ---
+    # --- i_am_done WITH resolved_findings for both now succeeds, and the
+    # dev's fix is re-captured as a new artifact superseding the bounced one. ---
+    kit.workspace.patch = patch_for("app/health.py", "def healthz(): return fixed")
     env = await c.i_am_done(
         dev_agent.id,
         task.id,
@@ -865,6 +879,9 @@ async def test_i_am_done_full_chain_blocks_then_resolves(
     )
     assert env.error is None, f"resolved i_am_done should succeed: {env.as_dict()}"
     assert env.status == Status.AWAITING_QA.value
+    resubmitted = await task_service.get(task.id)
+    assert resubmitted is not None
+    assert resubmitted.review_artifact_id != first_artifact_id
 
     remaining_open = await ReviewFindingsRepository(db_session).list_for_task(
         task.id, status=STATUS_OPEN
@@ -1028,7 +1045,6 @@ async def test_submit_up_blocked_by_open_finding_then_resolved(
         created_by=setup["system_agent"].id,
         assigned_to=cell_pm.id,
         claimed_by=cell_pm.id,
-        branch_name="feature/backend/healthz-cell",
         acceptance_criteria=["Returns 200"],
     )
     db_session.add(task)
@@ -1037,9 +1053,9 @@ async def test_submit_up_blocked_by_open_finding_then_resolved(
     repo = ReviewFindingsRepository(db_session)
     rows = await repo.insert_many(
         task_id=task.id,
-        origin="pr_gate",
+        origin="pm",
         round=1,
-        author_slug="be-pr-reviewer",
+        author_slug="be-pm",
         findings=[
             Finding(
                 severity=Severity.MAJOR,
@@ -1050,7 +1066,7 @@ async def test_submit_up_blocked_by_open_finding_then_resolved(
     )
     finding_id8 = str(rows[0].id)[:8]
 
-    c = _choreographer(db_session, task)
+    c = _local_review_choreographer(db_session, setup["kit"])
 
     blocked = await c.submit_up(cell_pm.id, task.id, "bubbling up the cell's work")
     body = blocked.as_dict()
@@ -1066,7 +1082,7 @@ async def test_submit_up_blocked_by_open_finding_then_resolved(
         ],
     )
     assert ok.error is None, ok.as_dict()
-    assert ok.status == Status.AWAITING_PR_REVIEW.value
+    assert ok.status == Status.AWAITING_PM_REVIEW.value
 
     addressed = await repo.list_for_task(task.id, status=STATUS_ADDRESSED)
     assert len(addressed) == 1
@@ -1149,7 +1165,6 @@ async def test_submit_root_blocked_by_open_finding_then_resolved(
         created_by=setup["system_agent"].id,
         assigned_to=main_pm.id,
         claimed_by=main_pm.id,
-        branch_name="feature/main_pm/healthz-root",
         acceptance_criteria=["Returns 200"],
     )
     db_session.add(task)
@@ -1171,9 +1186,11 @@ async def test_submit_root_blocked_by_open_finding_then_resolved(
     )
     finding_id8 = str(rows[0].id)[:8]
 
-    c = _choreographer(db_session, task)
+    c = _local_review_choreographer(db_session, setup["kit"])
 
-    blocked = await c.submit_root(main_pm.id, task.id, "opening the root->master PR")
+    blocked = await c.submit_root(
+        main_pm.id, task.id, "submitting the root for the final review"
+    )
     body = blocked.as_dict()
     assert body["error"] == "tracing_gap", body
     assert f"finding:{finding_id8}" in body["missing"]
@@ -1181,13 +1198,13 @@ async def test_submit_root_blocked_by_open_finding_then_resolved(
     ok = await c.submit_root(
         main_pm.id,
         task.id,
-        "opening the root->master PR now that scope is reverted",
+        "submitting the root for the final review now that scope is reverted",
         resolved_findings=[
             {"finding_id": finding_id8, "commit": "def456", "note": "reverted"}
         ],
     )
     assert ok.error is None, ok.as_dict()
-    assert ok.status == Status.AWAITING_PR_REVIEW.value
+    assert ok.status == Status.AWAITING_PM_REVIEW.value
 
     addressed = await repo.list_for_task(task.id, status=STATUS_ADDRESSED)
     assert len(addressed) == 1
@@ -1219,12 +1236,12 @@ async def test_cell_pm_complete_stamps_pm_origin_addressed_findings_verified(
         project_id=setup["project"].id,
         created_by=setup["system_agent"].id,
         assigned_to=cell_pm.id,
-        pr_number=_PR_NUMBER,
-        branch_name=_BRANCH,
         acceptance_criteria=["Returns 200"],
     )
     db_session.add(task)
     await db_session.flush()
+    kit: LocalReviewKit = setup["kit"]
+    await kit.capture_open_artifact(task, agent_id=setup["dev_agent"].id)
 
     repo = ReviewFindingsRepository(db_session)
     rows = await repo.insert_many(
@@ -1242,7 +1259,7 @@ async def test_cell_pm_complete_stamps_pm_origin_addressed_findings_verified(
     )
     await repo.mark_addressed(task.id, str(rows[0].id), commit="abc", note="reverted")
 
-    c = _choreographer(db_session, task)
+    c = _local_review_choreographer(db_session, kit)
     env = await c.cell_pm_complete(
         cell_pm.id, task.id, "reviewed and approved; scope reverted"
     )
@@ -1251,6 +1268,9 @@ async def test_cell_pm_complete_stamps_pm_origin_addressed_findings_verified(
     verified = await repo.list_for_task(task.id, status=STATUS_VERIFIED)
     assert len(verified) == 1
     assert verified[0].id == rows[0].id
+    artifact = await kit.artifacts.current_for(task)
+    assert artifact is not None
+    assert artifact.status == "accepted"
 
 
 # ---------------------------------------------------------------------------
